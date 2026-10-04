@@ -22,7 +22,8 @@ const BARROWS_START := 10
 const HQ_POS := Vector2i(93 * K, 90 * K)
 const BUILDERS_BASE := 3
 const BUILDERS_PER_LAGER := 2
-const SEATS := 10          # Sitzplaetze im Traegerlager
+const IDLERS_MAX := 0      # sichtbare freie Pixler am Langhaus
+const SEATS := 10         # Sitzplaetze im Traegerlager
 const DIG_T := 3.0         # Sekunden, bis der Wegebauer eine Wegzelle geschaufelt hat
 
 class Road:
@@ -1875,7 +1876,8 @@ func upd_eco() -> void:
 	if rab < 32 and rng.randf() < 0.2:
 		spawn_animal("rabbit")
 	# Idle-Pixler um das HQ
-	var want_idle := clampi(free_pixlers(), 0, 12)
+	# Freie Pixler laufen nicht durchs Dorf (zu unübersichtlich); IDLERS_MAX > 0 schaltet sie wieder ein
+	var want_idle := mini(clampi(free_pixlers(), 0, 12), IDLERS_MAX)
 	while idlers.size() < want_idle:
 		var a := Animal.new()
 		a.kind = "idler"
