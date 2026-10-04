@@ -323,7 +323,23 @@ func _selftest() -> void:
 	log.call("haus done=%s msg=%s" % [hz.done, hz.msg])
 	var bs := sim.total_stock("bretter")
 	sim.demolish(hz)
-	log.call("refund bretter %d -> %d (before %d)" % [bs, sim.total_stock("bretter"), before])
+	var piles := 0
+	for pb in sim.blds.values():
+		if pb.type == "haufen":
+			piles += 1
+			log.call("pile outbox=%s" % str(pb.outbox))
+	_run(120.0)
+	var left := 0
+	for pb in sim.blds.values():
+		if pb.type == "haufen":
+			left += 1
+	log.call("haus demolished: piles %d -> %d after 120s, bretter %d, holz %d" % [piles, left, sim.total_stock("bretter"), sim.total_stock("holz")])
+	# Baustelle und Lagerhaus abreissen
+	var lsp := _spot("lager", hc.x + 2, hc.y + 14)
+	var lg := sim.place_building("lager", lsp.x, lsp.y)
+	log.call("site lager demolishable=%s" % sim.can_demolish(lg))
+	sim.demolish(lg)
+	log.call("hq demolishable=%s" % sim.can_demolish(hq))
 	# Ranch, Lager, Landmarks
 	sim.pop = 80
 	for t in ["ranch", "lager", "schrein", "obelisk", "glaspalast", "eispavillon", "laterne"]:
@@ -878,7 +894,7 @@ func _content_count(b: Sim.Bld) -> int:
 func _try_demolish(b: Sim.Bld) -> bool:
 	# true, wenn das Gebaeude abgerissen wurde. Gebaeude mit Inhalt oder Ausbau fragen nach.
 	if not sim.can_demolish(b):
-		say("Das %s lässt sich nicht abreißen." % ("Langhaus" if b.type == "hq" else "Lagerhaus"), 2.5)
+		say("Das %s lässt sich nicht abreißen." % ("Langhaus" if b.type == "hq" else "Haufen"), 2.5)
 		sfx.play("deny", 0.5)
 		return false
 	var n := _content_count(b) if b.done else 0
@@ -891,7 +907,7 @@ func _try_demolish(b: Sim.Bld) -> bool:
 			why.append("%d Waren" % n)
 		if lv > 1:
 			why.append("Ausbaustufe %d" % lv)
-		say("%s enthält %s (Waren gehen zurück ins Lager, Ausbau nur zur Hälfte). Nochmal klicken zum Abreißen." % [Data.BD[b.type].n, " und ".join(why)], 4.0)
+		say("%s enthält %s (alles bleibt als Haufen liegen, Träger sammeln es ein). Nochmal klicken zum Abreißen." % [Data.BD[b.type].n, " und ".join(why)], 4.0)
 		sfx.play("deny", 0.4)
 		return false
 	demo_pending = -1
@@ -1982,7 +1998,7 @@ func _draw_glow(n: Node2D) -> void:
 			"pilzhuette": _glow(n, "teal", c + Vector2(0, -24), 2.4, a * 0.8)
 			"obsidian": _glow(n, "lava", c + Vector2(0, -12), 2.0, a)
 			_:
-				if d.kind != "store" or b.type == "hq":
+				if (d.kind != "store" or b.type == "hq") and d.kind != "pile":
 					_glow(n, "warm", c + Vector2(0, -12), 2.2, a * 0.6)
 
 func _glow(n: Node2D, name: String, c: Vector2, s: float, a: float) -> void:

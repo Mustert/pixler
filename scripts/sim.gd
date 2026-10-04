@@ -403,7 +403,7 @@ func used_workers() -> int:
 	var n := 0
 	for b in blds.values():
 		var k: String = Data.BD[b.type].kind
-		if k != "store" and k != "lm" and k != "house" and k != "hub":
+		if k != "store" and k != "lm" and k != "house" and k != "hub" and k != "pile":
 			n += 1
 	return n
 
@@ -1403,7 +1403,7 @@ func _finish(b: Bld) -> void:
 			animals.append(a)
 	if upgraded:
 		events.append(["up", "%s: jetzt %s (%d Plätze)" % [d.n, Data.HOUSE_NAME[b.level], Data.HOUSE_CAP[b.level]], b.x + b.w * 0.5, b.y + b.h * 0.5])
-	else:
+	elif d.kind != "pile":
 		events.append(["done", d.n, b.x + b.w * 0.5, b.y + b.h * 0.5])
 
 func upgrade_error(b: Bld) -> String:
@@ -1444,8 +1444,8 @@ func _nearest_store(x: float, y: float, skip = null):
 	return best
 
 func can_demolish(b: Bld) -> bool:
-	# Langhaus und Lagerhaeuser sind der Kern der Logistik und lassen sich nicht abreissen
-	return b.type != "hq" and b.type != "lager"
+	# Nur das Langhaus (und Abrisshaufen) lassen sich nicht abreissen; Baustellen aller Art gehen immer
+	return b.type != "hq" and b.type != "haufen"
 
 func progress(b: Bld) -> float:
 	# Fortschritt der laufenden Taetigkeit 0..1, -1 wenn nichts laeuft
@@ -1476,16 +1476,20 @@ func demolish(b: Bld) -> void:
 		return
 	var d: Dictionary = Data.BD[b.type]
 	# Waren zurueck ins naechste Lager: Inhalt, Lager- und Ausgangsbestand, halbe Baukosten fertiger Gebaeude
+	# Alles bleibt als Haufen an der Abrissstelle liegen; Träger sammeln ihn ein.
+	# Die Baukosten fertiger Gebäude gibt es voll zurück, aber roh (Bretter -> Holz, Steinblöcke -> Stein).
 	var refund := {}
 	for k in b.inbox:
 		refund[k] = refund.get(k, 0) + b.inbox[k]
-	if b.done:
+	if b.done or b.upg:
 		for k in d.cost:
-			refund[k] = refund.get(k, 0) + (d.cost[k] + 1) / 2
+			var rk: String = Data.RAW.get(k, k)
+			refund[rk] = refund.get(rk, 0) + d.cost[k]
 		if b.type == "haus":
 			for lv in range(1, b.level):
 				for k in Data.HOUSE_UP[lv].cost:
-					refund[k] = refund.get(k, 0) + (Data.HOUSE_UP[lv].cost[k] + 1) / 2
+					var rk2: String = Data.RAW.get(k, k)
+					refund[rk2] = refund.get(rk2, 0) + Data.HOUSE_UP[lv].cost[k]
 	for k in b.stock:
 		refund[k] = refund.get(k, 0) + b.stock[k]
 	for k in b.outbox:
@@ -1497,15 +1501,9 @@ func demolish(b: Bld) -> void:
 	b.carriers = []
 	barrows_free += b.barrows
 	b.barrows = 0
-	var rs = _nearest_store(b.x + b.w * 0.5, b.y + b.h * 0.5, b)
 	var n_back := 0
-	if rs != null:
-		for k in refund:
-			if refund[k] > 0:
-				rs.stock[k] = rs.stock.get(k, 0) + refund[k]
-				n_back += refund[k]
-	if n_back > 0:
-		events.append(["refund", "%d Waren zurück ins Lager" % n_back, b.x + b.w * 0.5, b.y + b.h * 0.5])
+	for k in refund:
+		n_back += refund[k]
 	if d.kind == "lm":
 		landmarks.erase(b.type)
 	for yy in range(b.y, b.y + b.h):
@@ -1526,6 +1524,29 @@ func demolish(b: Bld) -> void:
 	for a in animals.duplicate():
 		if a.home == b:
 			animals.erase(a)
+	if n_back > 0:
+		var pile := place_building("haufen", b.x, b.y, true)
+		for k in refund:
+			if refund[k] > 0:
+				pile.outbox[k] = refund[k]
+		events.append(["refund", "%d Waren liegen an der Abrissstelle" % n_back, b.x + b.w * 0.5, b.y + b.h * 0.5])
+	net_ver += 1
+
+func _upd_pile(b: Bld) -> void:
+	# Abrisshaufen verschwindet, sobald alles abgeholt ist (und kein Traeger mehr auf dem Weg dorthin ist)
+	if outbox_total(b) > 0:
+		return
+	for o in blds.values():
+		for c in o.carriers:
+			if c.src == b.id:
+				return
+	for yy in range(b.y, b.y + b.h):
+		for xx in range(b.x, b.x + b.w):
+			occ[yy * MW + xx] = 0
+	var di := b.door.y * MW + b.door.x
+	if doorc[di] == b.id:
+		doorc[di] = 0
+	blds.erase(b.id)
 	net_ver += 1
 
 func has_inputs(b: Bld) -> bool:
@@ -1668,6 +1689,9 @@ func upd_bld(b: Bld, dt: float) -> void:
 		return
 	if d.has("hub"):
 		_upd_hub(b, dt)
+	if d.kind == "pile":
+		_upd_pile(b)
+		return
 	if d.kind == "store" or d.kind == "lm" or d.kind == "hub":
 		return
 	if d.kind == "service":

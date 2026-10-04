@@ -682,6 +682,9 @@ static func bld_img(type: String, fr: int) -> Image:
 			for x in [4, 10, 20, 26]:
 				rect(i, x, H - 26, 1, 3 + x % 3, "#e8fbff")
 			rect(i, W - 8, H - 7, 5, 4, "#bfeaff"); rect(i, W - 8, H - 7, 5, 1, "#f0fcff")
+		"haufen":
+			blob(i, W / 2.0, H - 8, 6.0, 3.5, ["#d0cdd8", "#aba8b8", "#8b8899", "#6a6779"], 2.0)
+			rect(i, 3, H - 7, 6, 2, "#8a5a34")
 		"wegebauer":
 			house(i, {"wall": "#b9a27a", "roof": "#7a6a52", "bh": 14, "rh": 10, "door": "#5a4030"})
 			blob(i, W - 6, H - 7, 4.5, 3, ["#d8d2c4", "#b8b2a4", "#98927f", "#78725f"], 7.0)
