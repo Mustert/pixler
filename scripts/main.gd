@@ -163,7 +163,7 @@ func _ready() -> void:
 		for b in sim.blds.values():
 			for c in b.carriers:
 				stc[c.st] = stc.get(c.st, 0) + 1
-		print("CARRIERS=", sim.carrier_count(), " states=", stc, " barrows free=", sim.barrows_free, "/", sim.barrows_total, " roads=", sim.roads.size(), " stations=", sim.stations.size())
+		print("CARRIERS=", sim.carrier_count(), " states=", stc, " barrows free=", sim.barrows_free, "/", sim.barrows_total, " roads=", sim.roads.size())
 		for b in sim.blds.values():
 			print("  ", b.type, " done=", b.done, " st=", b.st, " msg=", b.msg, " inbox=", b.inbox, " outbox=", b.outbox, " stock=", b.stock if b.type == "hq" else "")
 
@@ -296,18 +296,12 @@ func _selftest() -> void:
 	log.call("after 250s: dug=%d/%d" % [sim.roads.values()[0].dug, sim.roads.values()[0].n_own])
 	var pth := sim.route(wb.door.x, wb.door.y, hq.door.x, hq.door.y)
 	log.call("route len=%d" % pth.size())
-	# Traegerstation mitten auf den Weg
-	_set_mode("station", "")
 	var mc := Vector2i(-1, -1)
 	if sim.roads.size() > 0:
 		var rd: Sim.Road = sim.roads.values()[0]
 		var m: Array = rd.cells[rd.cells.size() / 2]
 		mc = Vector2i(m[0], m[1])
-		hover = mc
-		_click()
-	log.call("stations=%d" % sim.stations.size())
-	_run(60.0)
-	log.call("station manned=%s speed at mid=%.2f" % [str(sim.stations.values()[0].manned) if sim.stations.size() > 0 else "-", sim.spd_at(mc.y * MW + mc.x) if mc.x >= 0 else 0.0])
+	_run(5.0)
 	# Schubkarren im Traegerlager
 	sim.set_barrows(tl, 2)
 	log.call("barrows tl=%d free=%d" % [tl.barrows, sim.barrows_free])
@@ -363,7 +357,7 @@ func _selftest() -> void:
 	_click()
 	_update_ui()
 	log.call("sel=%s" % (sel.type if sel else "none"))
-	# Abriss: Holzfaeller, Traegerlager (Karren zurueck), Station, Weg
+	# Abriss: Holzfaeller, Traegerlager (Karren zurueck), Weg
 	_set_mode("demolish", "")
 	hover = Vector2i(hf.x, hf.y)
 	_click()
@@ -375,11 +369,10 @@ func _selftest() -> void:
 	if mc.x >= 0:
 		hover = mc
 		_click()
-		log.call("after station click stations=%d roads=%d" % [sim.stations.size(), sim.roads.size()])
-		_click()
+		log.call("after road click roads=%d" % sim.roads.size())
 	_run(10.0)
 	_update_mini()
-	log.call("after demolish blds=%d roads=%d stations=%d carriers=%d" % [sim.blds.size(), sim.roads.size(), sim.stations.size(), sim.carrier_count()])
+	log.call("after demolish blds=%d roads=%d carriers=%d" % [sim.blds.size(), sim.roads.size(), sim.carrier_count()])
 	_set_mode("select", "")
 	sel = null
 
@@ -586,7 +579,7 @@ func _setup_ui() -> void:
 	menu.add_child(vb)
 	var tools := HBoxContainer.new()
 	vb.add_child(tools)
-	for tdef in [["select", "Auswahl (Esc)"], ["road", "Weg (R)"], ["station", "Trägerstation (T)"], ["demolish", "Abriss (X)"]]:
+	for tdef in [["select", "Auswahl (Esc)"], ["road", "Weg (R)"],["demolish", "Abriss (X)"]]:
 		var b := Button.new()
 		b.text = tdef[1]
 		b.toggle_mode = true
@@ -795,7 +788,7 @@ func _tut_start() -> void:
 	if tut >= 2:
 		objective.get_parent().visible = false
 		return
-	_popup("Träger", "Fertige Waren bleiben im Gebäude liegen, bis ein Träger sie holt. Träger sitzen im Langhaus und in Trägerlagern. Sie laufen frei über die Karte, holen Waren aus Gebäuden im Umkreis und bringen sie dorthin, wo sie gebraucht werden, sonst ins Lager.\n\nIm Info-Panel stellst du ein, wie viele Träger (0 bis 10) und Schubkarren ein Haus hat. Pixler laufen ohne Wege langsamer. Mit dem Wegebauer kannst du Wege (R) und Trägerstationen (T) bauen.")
+	_popup("Träger", "Fertige Waren bleiben im Gebäude liegen, bis ein Träger sie holt. Träger sitzen im Langhaus und in Trägerlagern. Sie laufen frei über die Karte, holen Waren aus Gebäuden im Umkreis und bringen sie dorthin, wo sie gebraucht werden, sonst ins Lager.\n\nIm Info-Panel stellst du ein, wie viele Träger (0 bis 10) und Schubkarren ein Haus hat. Pixler laufen ohne Wege langsamer. Mit dem Wegebauer kannst du Wege (R) bauen.")
 	_popup("Deine Pixler", "Im Dorf leben am Anfang 30 Pixler, das Langhaus bietet Platz für 50. Jeder Träger, jeder Bauarbeiter, jedes Produktionshaus und jedes Lagerhaus (im Langhaus arbeiten drei) braucht einen Pixler. Oben siehst du, wie viele noch frei sind.\n\nIst keiner mehr frei, bekommen neue Wegstücke keinen Träger und neue Häuser können nicht gebaut werden.\n\nNeue Pixler ziehen ein, wenn in der Taverne Mahlzeiten serviert werden (Wasser und Brot, Fisch oder Fleisch) und noch Wohnraum frei ist. Mehr Wohnraum bringen Wohnhäuser.")
 	_popup("Bauarbeiter", "Neue Häuser sind Baustellen. Sind alle Materialien geliefert, laufen Bauarbeiter vom nächsten Lager zur Baustelle und bauen. Am Anfang gibt es nur wenige, jedes Lagerhaus bringt zwei weitere.\n\nWähle eine Baustelle an: Dort kannst du sie anhalten oder ihre Priorität erhöhen. Beim Abriss bekommst du Waren zurück.")
 	_popup("Holz und Stein", "Der Holzfäller fällt Bäume, das Sägewerk macht daraus Bretter. Der Steinbruch bricht Steine aus Felsen, der Steinmetz macht daraus Steinblöcke.\n\nBretter und Steinblöcke werden für jedes weitere Haus gebraucht. Setze den Holzfäller neben Bäume und den Steinbruch neben Felsen. Bleibe im Umkreis eines Trägerlagers (oder des Langhauses), dann werden Material und Waren geliefert.")
@@ -962,7 +955,7 @@ func _show_cat(c: String) -> void:
 		menu_grid.add_child(b)
 
 func _set_mode(m: String, bt: String) -> void:
-	if (m == "road" or m == "station") and not sim.roads_unlocked():
+	if m == "road" and not sim.roads_unlocked():
 		say("Dafür brauchst du zuerst einen Wegebauer.", 2.5)
 		if sfx != null:
 			sfx.play("deny", 0.5)
@@ -998,7 +991,7 @@ func _update_ui() -> void:
 	lab_pop.text = "Pixler %d/%d   Häuser %d · Träger %d · Bau %d · frei %d" % [sim.pop, pcap, used, sim.carrier_count(), sim.builders_active(), free]
 	for sb in speed_btns:
 		sb[0].set_pressed_no_signal(is_equal_approx(speed, sb[1]))
-	lab_pop.tooltip_text = "%d von %d Wohnplätzen belegt:\n%d arbeiten als Träger (Langhaus, Trägerlager, Stationen)\n%d arbeiten in Häusern\n%d sind Bauarbeiter im Einsatz\n%d sind frei\nNeue Pixler ziehen ein, wenn die Taverne Mahlzeiten serviert und Wohnraum frei ist (Wohnhäuser)." % [sim.pop, pcap, sim.carrier_count(), used, sim.builders_active(), free]
+	lab_pop.tooltip_text = "%d von %d Wohnplätzen belegt:\n%d arbeiten als Träger (Langhaus, Trägerlager)\n%d arbeiten in Häusern\n%d sind Bauarbeiter im Einsatz\n%d sind frei\nNeue Pixler ziehen ein, wenn die Taverne Mahlzeiten serviert und Wohnraum frei ist (Wohnhäuser)." % [sim.pop, pcap, sim.carrier_count(), used, sim.builders_active(), free]
 	lab_builder.text = "Bauarbeiter %d/%d" % [sim.builders_active(), sim.builder_cap()]
 	lab_pop.modulate = Color(1, 0.55, 0.45) if free <= 0 else (Color(1, 0.9, 0.5) if free == 1 else Color(0.85, 1, 0.8))
 	lab_barrow.text = "Karren %d/%d" % [sim.barrows_free, sim.barrows_total]
@@ -1159,7 +1152,6 @@ func _unhandled_input(ev: InputEvent) -> void:
 		match ev.keycode:
 			KEY_ESCAPE: _set_mode("select", "")
 			KEY_R: _set_mode("road", "")
-			KEY_T: _set_mode("station", "")
 			KEY_X: _set_mode("demolish", "")
 			KEY_F5: get_tree().reload_current_scene()
 			KEY_Z: _undo_road()
@@ -1214,15 +1206,6 @@ func _click() -> void:
 					road_prev_key = ""
 				else:
 					say("Kein Weg dorthin möglich.", 2.0)
-		"station":
-			var err := sim.station_error(t.x, t.y)
-			if err != "":
-				say(err, 2.5)
-				sfx.play("deny", 0.5)
-			else:
-				sim.place_station(t.x, t.y)
-				sfx.play("place", 0.9)
-				say("Trägerstation gebaut: ein Pixler sitzt auf dem Fliegenpilz und beschleunigt den Weg.", 3.0)
 		"demolish":
 			if sim.occ[i] != 0:
 				var b = sim.blds.get(sim.occ[i])
@@ -1380,10 +1363,8 @@ func _update_hint() -> void:
 		h = ghost_err if ghost_err != "" else Data.BD[build_type].n + ": Klick zum Bauen"
 	elif mode == "road":
 		h = "Weg: Klick auf ein Gebäude oder eine freie Stelle als Start, dann das Ziel anklicken. Rechtsklick beendet." if road_start == null else "Ziel anklicken (Kette möglich). Rechtsklick/Esc beendet."
-	elif mode == "station":
-		h = "Trägerstation: Klick auf einen Weg. Der Fliegenpilz kommt in die Mitte des Weges, ein Pixler macht ihn schneller."
 	elif mode == "demolish":
-		h = "Klick auf Gebäude, Weg oder Trägerstation zum Abreißen."
+		h = "Klick auf Gebäude oder Weg zum Abreißen."
 	hint.text = h
 	if mode == "road" and road_start != null and sim.inb(hover.x, hover.y):
 		var goal := _road_cell(hover)
@@ -1629,9 +1610,6 @@ func _draw() -> void:
 			if b.st in ["walk", "act", "back", "out", "ret"]:
 				var wr := clampi(int(b.wy) - y0, 0, rmax)
 				rows[wr].append([3, b])
-	for s in sim.stations.values():
-		if s.x >= x0 - 1 and s.x <= x1 + 1 and s.y >= y0 - 1 and s.y <= y1 + 1:
-			rows[clampi(s.y - y0, 0, rmax)].append([2, s])
 	for a in sim.animals:
 		if a.x >= x0 - 1 and a.x <= x1 + 2 and a.y >= y0 - 1 and a.y <= y1 + 2:
 			rows[clampi(int(a.y) - y0, 0, rmax)].append([5, a])
@@ -1653,7 +1631,6 @@ func _draw() -> void:
 				6: _draw_builder(e[1])
 				0: _draw_obj(e[1])
 				1: _draw_bld(e[1])
-				2: _draw_station(e[1])
 				3: _draw_worker(e[1])
 				4: _draw_carrier(e[1])
 				5: _draw_animal(e[1])
@@ -1828,11 +1805,6 @@ func _sit_draw(foot: Vector2, flip: bool) -> void:
 	else:
 		draw_texture_rect_region(tx, Rect2(fx - (w >> 1), fy - 25, w, 25), src)
 
-func _draw_station(s: Sim.Station) -> void:
-	var foot := Vector2(s.x * TS + 8, s.y * TS + 14)
-	spr(Art.station, foot)
-	if s.manned:
-		_sit_draw(foot + Vector2(0, -12 + sin(time * 2.0 + s.id) * 0.5), s.id % 2 == 0)
 
 func _walk_fr(speed_f: float, seed_f: float) -> int:
 	return int(time * speed_f + seed_f) % 4
@@ -1929,13 +1901,6 @@ func _draw_overlays() -> void:
 			if road_start != null:
 				draw_rect(Rect2(road_start.x * TS + 1, road_start.y * TS + 1, 14, 14), Color(0.4, 1, 0.5, 0.7), false, 1.0)
 			draw_rect(Rect2(t.x * TS, t.y * TS, TS, TS), Color(1, 1, 1, 0.5), false, 1.0)
-		"station":
-			var mc := sim.station_cell(t.x, t.y)
-			if mc.x >= 0:
-				var scol := Color(0.4, 1, 0.5, 0.8) if sim.station_error(t.x, t.y) == "" else Color(1, 0.4, 0.4, 0.8)
-				draw_rect(Rect2(mc.x * TS - 2, mc.y * TS - 2, TS + 4, TS + 4), scol, false, 1.0)
-				spr(Art.station, Vector2(mc.x * TS + 8, mc.y * TS + 14), false, Color(1, 1, 1, 0.6))
-			draw_rect(Rect2(t.x * TS, t.y * TS, TS, TS), Color(1, 1, 1, 0.4), false, 1.0)
 		"demolish", "select":
 			var col := Color(1, 0.4, 0.4, 0.6) if mode == "demolish" else Color(1, 1, 1, 0.4)
 			draw_rect(Rect2(t.x * TS, t.y * TS, TS, TS), col, false, 1.0)

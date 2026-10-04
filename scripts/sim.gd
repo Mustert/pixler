@@ -14,7 +14,6 @@ const K := Data.K
 const WALK_MULT := 0.75    # Lauftempo aller Pixler
 const OFFROAD := 0.6       # Tempo-Faktor abseits von Wegen
 const ROAD_SPEED := 1.0    # Tempo-Faktor auf einem Weg (spaeter: gepflasterte Wege schneller)
-const STATION_SPEED := 1.5 # Tempo-Faktor auf einem Weg mit besetzter Traegerstation
 const OUT_CAP := 8         # Waren, die in einem Gebaeude auf Abholung warten duerfen
 static var CARRY_N := 1        # Waren pro Traeger
 static var BARROW_N := 3       # Waren pro Traeger mit Schubkarre
@@ -32,19 +31,10 @@ class Road:
 	var bb := Rect2i()                # Zellen-Umriss (Rendering)
 	var pts := PackedVector2Array()   # Rendering-Cache: Weg-Polylinie in Weltkoordinaten
 	var bends := PackedVector2Array()
-	var station = null                # Station oder null
 	var own_from: int = 0             # Index in cells, ab dem dieses Wegstueck neu zu graben ist
 	var n_own: int = 0                # Anzahl zu grabender Zellen
 	var dug: int = 0                  # davon schon gegraben (der Wegebauer schaufelt Zelle fuer Zelle)
 	var worker: int = 0               # Wegebauer-Gebaeude, das hier gerade arbeitet
-
-class Station:
-	# Fliegenpilz in der Mitte eines Weges: ein sitzender Pixler macht den Weg schneller
-	var id: int
-	var road: int
-	var x: int
-	var y: int
-	var manned: bool = false
 
 class Bld:
 	var id: int
@@ -154,7 +144,6 @@ var t: float = 0.0
 var nid: int = 1
 var blds: Dictionary = {}
 var roads: Dictionary = {}
-var stations: Dictionary = {}
 var claims: Dictionary = {}
 var growing: Dictionary = {}
 var animals: Array = []
@@ -442,27 +431,21 @@ func total_stock(g: String) -> int:
 	return n
 
 func carrier_count() -> int:
-	# Pixler, die als Traeger arbeiten: sitzende und laufende Traeger plus besetzte Traegerstationen
+	# Pixler, die als Traeger arbeiten: sitzende und laufende Traeger (Langhaus und Traegerlager)
 	var n := 0
 	for b in blds.values():
 		n += b.carriers.size()
-	for s in stations.values():
-		if s.manned:
-			n += 1
 	return n
 
 func free_pixlers() -> int:
 	return pop - used_workers() - carrier_count() - builders_active()
 
 func waiting_for_pixler() -> int:
-	# Traeger-Plaetze (und Stationen), die ohne freien Pixler leer bleiben
+	# Traeger-Plaetze, die ohne freien Pixler leer bleiben
 	var n := 0
 	for b in blds.values():
 		if b.done and Data.BD[b.type].has("hub"):
 			n += maxi(0, b.cn - b.carriers.size())
-	for s in stations.values():
-		if not s.manned:
-			n += 1
 	return n
 
 func no_obj(i: int) -> bool:
@@ -537,21 +520,15 @@ func has_resource(type: String, x: int, y: int) -> bool:
 
 # ---------------------------------------------------------------- Wege
 func roads_unlocked() -> bool:
-	# Wege und Traegerstationen gibt es erst, wenn ein Wegebauer steht
+	# Wege gibt es erst, wenn ein Wegebauer steht
 	for b in blds.values():
 		if b.type == "wegebauer" and b.done:
 			return true
 	return false
 
 func spd_at(i: int) -> float:
-	# Tempo-Faktor der Zelle: abseits von Wegen langsamer, mit besetzter Traegerstation schneller
-	var r: int = road[i]
-	if r == 0:
-		return OFFROAD
-	var rd = roads.get(r)
-	if rd != null and rd.station != null and rd.station.manned:
-		return STATION_SPEED
-	return ROAD_SPEED
+	# Tempo-Faktor der Zelle: abseits von Wegen langsamer
+	return OFFROAD if road[i] == 0 else ROAD_SPEED
 
 func _mk_road(cells: Array) -> Road:
 	var r := Road.new()
@@ -631,7 +608,7 @@ func _upd_digger(b: Bld, dt: float) -> void:
 					bv = v
 					best = q
 			if best == null:
-				b.msg = "Bereit: Wege (R) und Trägerstationen (T) möglich"
+				b.msg = "Bereit: Wege (R) möglich"
 				return
 			best.worker = b.id
 			b.job = best.id
@@ -690,8 +667,6 @@ func _del_road(r: Road) -> void:
 			road[i] = 0
 		if plan[i] == r.id:
 			plan[i] = 0
-	if r.station != null:
-		stations.erase(r.station.id)
 	roads.erase(r.id)
 	net_ver += 1
 
@@ -705,61 +680,11 @@ func undo_road(ids: Array) -> bool:
 	return any
 
 func remove_road_at(x: int, y: int) -> bool:
-	# Abriss: eine Traegerstation geht zuerst, danach das Wegstueck
 	var rid: int = road[y * MW + x]
 	if rid == 0:
 		return false
-	var r: Road = roads[rid]
-	if r.station != null and abs(r.station.x - x) <= 1 and abs(r.station.y - y) <= 1:
-		stations.erase(r.station.id)
-		r.station = null
-		net_ver += 1
-		return true
-	_del_road(r)
+	_del_road(roads[rid])
 	return true
-
-func station_error(x: int, y: int) -> String:
-	if not roads_unlocked():
-		return "Dafür brauchst du den Wegebauer."
-	if not inb(x, y) or road[y * MW + x] == 0:
-		return "Trägerstationen kommen mitten auf einen Weg."
-	var r: Road = roads[road[y * MW + x]]
-	if not road_done(r):
-		return "Der Weg ist noch nicht fertig geschaufelt."
-	if r.station != null:
-		return "Auf diesem Weg sitzt schon ein Träger."
-	if r.cells.size() < 5:
-		return "Der Weg ist zu kurz für eine Station."
-	return ""
-
-func station_cell(x: int, y: int) -> Vector2i:
-	# Mitte des Weges unter der Zelle, (-1, -1) ohne Weg
-	if not inb(x, y) or road[y * MW + x] == 0:
-		return Vector2i(-1, -1)
-	var r: Road = roads[road[y * MW + x]]
-	var m: Array = r.cells[r.cells.size() / 2]
-	return Vector2i(m[0], m[1])
-
-func place_station(x: int, y: int) -> Station:
-	var r: Road = roads[road[y * MW + x]]
-	var m: Array = r.cells[r.cells.size() / 2]
-	var s := Station.new()
-	s.id = nid
-	nid += 1
-	s.road = r.id
-	s.x = m[0]
-	s.y = m[1]
-	r.station = s
-	stations[s.id] = s
-	net_ver += 1
-	return s
-
-func _upd_stations() -> void:
-	for s in stations.values():
-		if not s.manned and free_now > 0:
-			s.manned = true
-			free_now -= 1
-			net_ver += 1
 
 # ---------------------------------------------------------------- Laufwege
 func passable(x: int, y: int) -> bool:
@@ -788,7 +713,7 @@ func find_path(sx: int, sy: int, gx: int, gy: int, build: bool = true, margin: i
 	var goal := gy * MW + gx
 	var closed := {}
 	var expanded := 0
-	var hf := 0.6 if build else (1.0 / STATION_SPEED)
+	var hf := 0.6 if build else 1.0 / ROAD_SPEED
 	while open.size() > 0:
 		var cur: int = _hpop(open)
 		if closed.has(cur):
@@ -2069,7 +1994,6 @@ func update(dt: float) -> void:
 		upd_eco()
 	update_builders(dt)
 	free_now = free_pixlers()
-	_upd_stations()
 	for b in blds.values():
 		upd_bld(b, dt)
 	for a in animals:

@@ -10,7 +10,6 @@ static var man := {}        # key -> Array[Texture2D]
 static var an := {}         # kind -> Array[Texture2D]
 static var balloon: Array = []
 static var road: Array = []
-static var station: Texture2D
 static var glow := {}
 static var fieldt: Array = []
 static var fieldt2: Array = []
@@ -801,18 +800,6 @@ static func _traeger_mitte(i: Image, design: int, fr: int, cx: float, cy: float,
 				rect(i, x + p[0], y + p[1] + 1, 2, 3, "#f0e4cc")
 				blob(i, cx + p[0] + 1.0, cy + p[1] + 1.0, 3.2, 2.0, [["#ff8a7a", "#e8453c", "#b82a2a", "#7a1a22"], ["#b8fff0", "#5df2c8", "#22b08e", "#137a66"], ["#ffd6f5", "#f0a8ec", "#c77fe0", "#9560c4"]][p[2]], 6.0 + p[0])
 
-static func station_img() -> Image:
-	# Fliegenpilz fuer die Traegerstation (ein Pixler sitzt oben drauf, siehe main.gd)
-	var i := mk(14, 14)
-	rect(i, 5, 7, 4, 6, "#f4ecd8")
-	rect(i, 5, 7, 1, 6, "#fffaf0")
-	rect(i, 8, 7, 1, 6, "#d8ccb0")
-	blob(i, 7, 5, 6.5, 4.3, ["#ff7a68", "#e8453c", "#b82a2a", "#7a1a22"], 4.0)
-	for p in [[2, 3], [6, 1], [10, 3], [4, 6], [8, 6]]:
-		rect(i, p[0], p[1], 2, 1, "#ffffff")
-		px(i, p[0], p[1] + 1, Color("#f4ecd8"))
-	return i
-
 static func house_tex(type: String) -> Array:
 	var res: Array = []
 	for fr in (3 if type == "haus" else (6 if type == "traeger" else 2)):
@@ -1126,9 +1113,6 @@ static func build() -> void:
 	an["bird"] = [tex(bird_img(0)), tex(bird_img(1))]
 	for c in ["#f5a0d0", "#a0d8f5", "#f5e070"]:
 		an["fly" + c] = [tex(fly_img(0, c)), tex(fly_img(1, c))]
-	S = 2
-	station = fin(station_img(), true)
-	S = 1
 	glow["warm"] = tex(glow_img(Color(1.0, 0.7, 0.35)))
 	glow["pink"] = tex(glow_img(Color(1.0, 0.6, 0.95)))
 	glow["cyan"] = tex(glow_img(Color(0.5, 0.95, 1.0)))

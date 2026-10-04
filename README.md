@@ -12,10 +12,10 @@ Dieser Zweig (`feature/no-flags-no-carriers`) ist die **flaggen- und wegträgerl
 - **Träger** sitzen im **Langhaus** (4 am Start, Umkreis 20 Kacheln) und in **Trägerlagern** (2x2, Umkreis 12 Kacheln, doppelt so viel wie bei den meisten Betrieben). Innerhalb ihres Umkreises holen sie Waren aus Betrieben und Lagern und bringen sie dorthin, wo sie gebraucht werden (Baustellen zuerst), sonst ins nächste Lager. Beide Gebäude müssen im Umkreis liegen: Für weitere Strecken baut man ein Lagerhaus als Zwischenstation und ein zweites Trägerlager.
 - **Trägerlager** gibt es in drei zufälligen Designs (Steinkreis, Baumstämme ums Lagerfeuer, Pilze), die Träger sitzen darauf. Im Info-Panel stellt man 0 bis 10 Träger und die Schubkarren ein (höchstens so viele wie Träger, mit Karre trägt ein Träger 3 Waren statt 1).
 - Pixler laufen **frei** zwischen den Gebäuden, ohne Weg nur mit 60 % Tempo.
-- Der **Wegebauer** schaltet Wege (R) und **Trägerstationen** (T) frei. Neue Wege sind zuerst nur geplant (gestrichelt): Der Pixler eines Wegebauers schaufelt sie Zelle für Zelle (`Sim.DIG_T`), pro Wegebauer ein Weg zur Zeit, für mehr Tempo beim Wegebau baut man mehrere. Wege sind schneller als Wiese (`Sim.ROAD_SPEED`, später pflasterbar für mehr Tempo). Die Trägerstation ist ein Fliegenpilz in der Mitte eines Weges, auf dem ein Pixler sitzt: Auf diesem Weg gehen alle 1,5-mal so schnell (`Sim.STATION_SPEED`).
+- Der **Wegebauer** schaltet Wege (R) frei. Neue Wege sind zuerst nur geplant (gestrichelt): Der Pixler eines Wegebauers schaufelt sie Zelle für Zelle (`Sim.DIG_T`), pro Wegebauer ein Weg zur Zeit, für mehr Tempo beim Wegebau baut man mehrere. Wege sind schneller als Wiese (`Sim.ROAD_SPEED`, später pflasterbar für mehr Tempo). (Trägerstationen an Wegen sind vorerst wieder entfernt.)
 - **Abriss:** Alles außer dem Langhaus lässt sich abreißen, Baustellen immer. Der Inhalt und die vollen Baukosten (roh: Bretter → Holz, Steinblöcke → Stein) bleiben als **Abrisshaufen** an der Stelle liegen, Träger im Umkreis sammeln sie ein.
 - Neue Häuser sind Baustellen und bekommen ihr Material von den Trägern geliefert; die Bauarbeiter laufen frei vom Lager hin.
-- Jedes Produktionshaus, jeder Träger und jede besetzte Station braucht einen **Pixler**. Neue Pixler ziehen ein, wenn die **Taverne** Mahlzeiten (Brot + Fisch/Fleisch + Wasser) serviert.
+- Jedes Produktionshaus, jeder Träger und jeder Wegebauer braucht einen **Pixler**. Neue Pixler ziehen ein, wenn die **Taverne** Mahlzeiten (Brot + Fisch/Fleisch + Wasser) serviert.
 - Ziel: Baue alle **5 Wahrzeichen**. Sie brauchen jeweils eine Spezialware aus einem Biom.
 
 ## Neu in dieser Version
@@ -56,7 +56,6 @@ Dieser Zweig (`feature/no-flags-no-carriers`) ist die **flaggen- und wegträgerl
 ## Steuerung
 - Linksklick: bauen / auswählen. Mausrad oder +/-: Zoom.
 - **R** Weg (Start anklicken, dann Ziel; Kettenbau, Rechtsklick/Esc beendet; braucht den Wegebauer)
-- **T** Trägerstation: Klick auf einen Weg, der Pilz kommt in dessen Mitte (braucht den Wegebauer)
 - **Z** letzten Weg zurücknehmen, **M** Ton an/aus
 - **X** Abriss, **Esc** Auswahl, **Leertaste** Pause, **F5** neue Welt
 - WASD/Pfeile oder Mittelmaustaste/Rechtsklick ziehen: Kamera. Minimap anklicken zum Springen.

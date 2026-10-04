@@ -1,4 +1,4 @@
-extends SceneTree
+﻿extends SceneTree
 # Entwicklerwerkzeug: rendert alle prozeduralen Sprites in ein Kontaktbild.
 # godot --headless --path . --script tools/sheet.gd -- out.png [scale]
 
@@ -60,7 +60,6 @@ func _init() -> void:
 			put(Art.an[a][0])
 		for g in Art.goods:
 			put(Art.goods[g])
-		put(Art.station)
 		newrow()
 	sheet = sheet.get_region(Rect2i(0, 0, W, mini(2400, st.y + st.rowh + 10)))
 	if sc > 1:
