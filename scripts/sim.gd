@@ -23,6 +23,7 @@ const HQ_POS := Vector2i(93 * K, 90 * K)
 const BUILDERS_BASE := 3
 const BUILDERS_PER_LAGER := 2
 const SEATS := 10          # Sitzplaetze im Traegerlager
+const DIG_T := 3.0         # Sekunden, bis der Wegebauer eine Wegzelle geschaufelt hat
 
 class Road:
 	var id: int
@@ -31,6 +32,10 @@ class Road:
 	var pts := PackedVector2Array()   # Rendering-Cache: Weg-Polylinie in Weltkoordinaten
 	var bends := PackedVector2Array()
 	var station = null                # Station oder null
+	var own_from: int = 0             # Index in cells, ab dem dieses Wegstueck neu zu graben ist
+	var n_own: int = 0                # Anzahl zu grabender Zellen
+	var dug: int = 0                  # davon schon gegraben (der Wegebauer schaufelt Zelle fuer Zelle)
+	var worker: int = 0               # Wegebauer-Gebaeude, das hier gerade arbeitet
 
 class Station:
 	# Fliegenpilz in der Mitte eines Weges: ein sitzender Pixler macht den Weg schneller
@@ -80,6 +85,7 @@ class Bld:
 	var cn: int = 0            # gewuenschte Anzahl Traeger (0-10)
 	var barrows: int = 0       # Schubkarren im Haus (hoechstens so viele wie Traeger)
 	var carriers: Array = []
+	var job: int = 0           # Wegebauer: Weg, der gerade gegraben wird
 
 class Carrier:
 	var hub: int
@@ -137,7 +143,8 @@ var stump := PackedByteArray()
 var age := PackedFloat32Array()
 var occ := PackedInt32Array()
 var road := PackedInt32Array()
-var doorc := PackedInt32Array()   # Zelle -> Gebaeude, dessen Tuer-Zelle sie ist
+var plan := PackedInt32Array()    # Zelle -> Weg, der dort noch gegraben werden soll
+var doorc := PackedInt32Array()  # Zelle -> Gebaeude, dessen Tuer-Zelle sie ist
 var field := PackedInt32Array()
 var chunk_obj: Array = []     # pro Chunk: Dictionary Zelle -> true fuer alle Zellen mit Objekt
 var chunk_stump: Array = []
@@ -205,7 +212,7 @@ func gen(s: int) -> void:
 		arr.fill(0)
 	age.resize(NT)
 	age.fill(0.0)
-	for arr in [occ, road, doorc, field]:
+	for arr in [occ, road, plan, doorc, field]:
 		arr.resize(NT)
 		arr.fill(0)
 	chunk_obj = []
@@ -565,33 +572,123 @@ func _mk_road(cells: Array) -> Road:
 	return r
 
 func add_road(cells: Array) -> Array:
-	# Legt den Weg an, aber nur auf Zellen ohne Weg (Abschnitte, die schon Weg sind, bleiben wie sie sind).
-	# Gibt die IDs der neuen Wegstuecke zurueck (leer, wenn nichts neu war).
+	# Plant den Weg, aber nur auf Zellen ohne Weg (Abschnitte, die schon Weg sind, bleiben wie sie sind).
+	# Gegraben wird spaeter von einem Wegebauer (siehe _upd_digger). Gibt die IDs der neuen Wegstuecke zurueck.
 	var ids: Array = []
 	var n := cells.size()
 	var k := 0
 	while k < n:
-		if road[cells[k][1] * MW + cells[k][0]] != 0:
+		var i0: int = cells[k][1] * MW + cells[k][0]
+		if road[i0] != 0 or plan[i0] != 0:
 			k += 1
 			continue
 		var e := k
-		while e + 1 < n and road[cells[e + 1][1] * MW + cells[e + 1][0]] == 0:
+		while e + 1 < n and road[cells[e + 1][1] * MW + cells[e + 1][0]] == 0 and plan[cells[e + 1][1] * MW + cells[e + 1][0]] == 0:
 			e += 1
 		var r := _mk_road(cells.slice(maxi(k - 1, 0), mini(e + 2, n)))
+		r.own_from = 1 if k > 0 else 0
+		r.n_own = e - k + 1
 		for q in range(k, e + 1):
 			var ci: int = cells[q][1] * MW + cells[q][0]
-			road[ci] = r.id
+			plan[ci] = r.id
 			field[ci] = 0
 			clear_soft(ci)
 		ids.append(r.id)
 		k = e + 1
 	return ids
 
+func road_done(r: Road) -> bool:
+	return r.dug >= r.n_own
+
+func _dig_cell(r: Road) -> Vector2i:
+	var c: Array = r.cells[r.own_from + r.dug]
+	return Vector2i(c[0], c[1])
+
+func _upd_digger(b: Bld, dt: float) -> void:
+	# Der Wegebauer-Pixler laeuft zu einem geplanten Weg und schaufelt ihn Zelle fuer Zelle frei
+	var dp := door_pos(b)
+	var r = roads.get(b.job)
+	if b.st != "idle" and b.st != "back" and (r == null or road_done(r)):
+		if r != null:
+			r.worker = 0
+		b.job = 0
+		b.st = "back"
+	match b.st:
+		"idle":
+			b.busy = false
+			b.timer -= dt
+			if b.timer > 0.0:
+				return
+			b.timer = 1.0
+			var best = null
+			var bv := 1e9
+			for q in roads.values():
+				if road_done(q) or (q.worker != 0 and blds.has(q.worker)):
+					continue
+				var v := Vector2(_dig_cell(q)).distance_to(Vector2(b.door))
+				if v < bv:
+					bv = v
+					best = q
+			if best == null:
+				b.msg = "Bereit: Wege (R) und Trägerstationen (T) möglich"
+				return
+			best.worker = b.id
+			b.job = best.id
+			b.wx = dp.x
+			b.wy = dp.y
+			b.st = "walk"
+			b.msg = "Geht zum neuen Weg"
+		"walk", "back":
+			b.busy = true
+			var tgt := dp
+			if b.st == "walk":
+				var c := _dig_cell(r)
+				tgt = Vector2(c.x + 0.5, c.y + 0.5)
+			var dv := tgt - Vector2(b.wx, b.wy)
+			var step := 2.3 * K * WALK_MULT * dt
+			if dv.length() <= step:
+				b.wx = tgt.x
+				b.wy = tgt.y
+				if b.st == "walk":
+					b.st = "act"
+					b.timer = DIG_T
+					b.ptot = DIG_T
+					b.msg = "Schaufelt den Weg"
+				else:
+					b.st = "idle"
+					b.timer = 0.5
+					b.busy = false
+			else:
+				dv = dv.normalized() * step
+				b.wx += dv.x
+				b.wy += dv.y
+				if absf(dv.x) > 0.01:
+					b.face = 1 if dv.x > 0 else -1
+		"act":
+			b.busy = true
+			b.timer -= dt
+			if b.timer <= 0.0:
+				var c := _dig_cell(r)
+				var ci := c.y * MW + c.x
+				road[ci] = r.id
+				plan[ci] = 0
+				r.dug += 1
+				r.pts = PackedVector2Array()
+				net_ver += 1
+				if road_done(r):
+					r.worker = 0
+					b.job = 0
+					b.st = "back"
+				else:
+					b.st = "walk"
+
 func _del_road(r: Road) -> void:
 	for c in r.cells:
 		var i: int = c[1] * MW + c[0]
 		if road[i] == r.id:
 			road[i] = 0
+		if plan[i] == r.id:
+			plan[i] = 0
 	if r.station != null:
 		stations.erase(r.station.id)
 	roads.erase(r.id)
@@ -626,6 +723,8 @@ func station_error(x: int, y: int) -> String:
 	if not inb(x, y) or road[y * MW + x] == 0:
 		return "Trägerstationen kommen mitten auf einen Weg."
 	var r: Road = roads[road[y * MW + x]]
+	if not road_done(r):
+		return "Der Weg ist noch nicht fertig geschaufelt."
 	if r.station != null:
 		return "Auf diesem Weg sitzt schon ein Träger."
 	if r.cells.size() < 5:
@@ -842,7 +941,7 @@ func is_hub(b) -> bool:
 static func seat_off(i: int) -> Vector2:
 	# Sitzplaetze liegen auf einer Ellipse um die Mitte (in Zellen); Art.gd zeichnet die Sitze an denselben Stellen
 	var a := TAU * (float(i) + 0.5) / SEATS + 0.2
-	return Vector2(cos(a) * 2.5, sin(a) * 1.45 + 0.2)
+	return Vector2(cos(a) * 1.7, sin(a) * 1.0 + 0.15)
 
 func seat_pos(b, i: int) -> Vector2:
 	return Vector2(b.x + b.w * 0.5, b.y + b.h * 0.5) + seat_off(i)
@@ -1572,7 +1671,11 @@ func upd_bld(b: Bld, dt: float) -> void:
 	if d.kind == "store" or d.kind == "lm" or d.kind == "hub":
 		return
 	if d.kind == "service":
-		b.msg = "Wege (R) und Trägerstationen (T) sind freigeschaltet"
+		if b.paused:
+			b.msg = "Pausiert"
+			b.busy = false
+			return
+		_upd_digger(b, dt)
 		return
 	if d.kind == "house":
 		_upd_house(b, dt)

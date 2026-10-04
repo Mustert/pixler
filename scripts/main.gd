@@ -291,7 +291,9 @@ func _selftest() -> void:
 	_update_hint()
 	log.call("prev=%d" % road_prev.size())
 	_click()
-	log.call("roads=%d" % sim.roads.size())
+	log.call("roads=%d dug=%d/%d" % [sim.roads.size(), sim.roads.values()[0].dug, sim.roads.values()[0].n_own])
+	_run(250.0)
+	log.call("after 250s: dug=%d/%d" % [sim.roads.values()[0].dug, sim.roads.values()[0].n_own])
 	var pth := sim.route(wb.door.x, wb.door.y, hq.door.x, hq.door.y)
 	log.call("route len=%d" % pth.size())
 	# Traegerstation mitten auf den Weg
@@ -392,18 +394,17 @@ func _demo() -> void:
 		if sp.x < 0:
 			continue
 		# die Wege-Infrastruktur steht sofort, der Rest wird gebaut
-		var b := sim.place_building(type, sp.x, sp.y, type in ["traeger", "lager"])
+		var b := sim.place_building(type, sp.x, sp.y, type in ["traeger", "lager", "wegebauer"])
 		if type == "traeger":
 			sim.set_carriers(b, 3)
 		elif type == "lager":
 			for k in ["bretter", "steinblock", "stein", "holz", "wasser"]:
 				b.stock[k] = 20
 		elif type == "wegebauer":
-			# Beispielweg vom Wegebauer zum Langhaus, mit Trägerstation in der Mitte
+			# Beispielweg vom Wegebauer zum Langhaus (wird geschaufelt)
 			var wp := sim.find_path(b.door.x, b.door.y, hq.door.x, hq.door.y)
 			if wp.size() > 1:
 				sim.add_road(wp)
-				sim.place_station(wp[wp.size() / 2][0], wp[wp.size() / 2][1])
 
 
 # ------------------------------------------------------------ UI
@@ -1508,7 +1509,7 @@ func _seg_pts(s: Sim.Road) -> void:
 	# Weg als Polylinie ueber die Zellmitten; Knickpunkte bekommen runde Gelenke
 	var pts := PackedVector2Array()
 	var bends := PackedVector2Array()
-	var n: int = s.cells.size()
+	var n: int = mini(s.cells.size(), s.own_from + s.dug)   # nur der schon gegrabene Teil
 	for k in n:
 		var c: Array = s.cells[k]
 		var p := Vector2(c[0] * TS + TS * 0.5, c[1] * TS + TS * 0.5)
@@ -1528,8 +1529,17 @@ func _draw_roads(x0: int, y0: int, x1: int, y1: int) -> void:
 		var bb: Rect2i = s.bb
 		if bb.position.x > x1 or bb.end.x < x0 or bb.position.y > y1 or bb.end.y < y0:
 			continue
+		if not sim.road_done(s):
+			# geplanter, noch nicht geschaufelter Teil
+			var pl := PackedVector2Array()
+			for k in range(maxi(s.own_from + s.dug - 1, 0), s.cells.size()):
+				pl.append(Vector2(s.cells[k][0] * TS + TS * 0.5, s.cells[k][1] * TS + TS * 0.5))
+			if pl.size() > 1:
+				draw_polyline(pl, Color(0.45, 0.3, 0.15, 0.35), 3.0)
 		if s.pts.is_empty():
 			_seg_pts(s)
+		if s.pts.size() < 2:
+			continue
 		vis.append(s)
 	# 1. Rand, 2. Fuellung, 3. Glanz: alle Wege einer Ebene zusammen, damit Abzweige ohne Naht verschmelzen
 	for s in vis:
@@ -1546,7 +1556,7 @@ func _draw_roads(x0: int, y0: int, x1: int, y1: int) -> void:
 		draw_circle(s.pts[s.pts.size() - 1], ROAD_W * 0.5, ROAD_FILL)
 	for s in vis:
 		draw_polyline(s.pts, ROAD_LIGHT, 3.0)
-		for c in s.cells:
+		for c in s.cells.slice(0, s.own_from + s.dug):
 			var h := Data.hsh(c[0], c[1], 7.0)
 			if h < 0.45:
 				var qx: float = c[0] * TS + 3.0 + floorf(Data.hsh(c[1], c[0], 2.0) * 10.0)

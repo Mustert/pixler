@@ -734,8 +734,8 @@ static func _traeger(i: Image, design: int, fr: int, W: int, H: int) -> void:
 	# Traegerlager: Platz mit Sitzen auf einer Ellipse (gleiche Stellen wie Sim.seat_off) und Mitte.
 	# 0 Steinkreis, 1 Staemme um ein Lagerfeuer, 2 Pilze
 	var cx := W / 2.0
-	var cy := H - 25.0       # Mitte des Grundstuecks
-	blob(i, cx, cy + 1.6, 25.0, 15.5, ["#c9b588", "#b39d70", "#9a855c", "#806e4a"], 11.0)
+	var cy := H - 17.0       # Mitte des Grundstuecks
+	blob(i, cx, cy + 1.2, 17.0, 10.5,["#c9b588", "#b39d70", "#9a855c", "#806e4a"], 11.0)
 	var stone := ["#d0cdd8", "#aba8b8", "#8b8899", "#6a6779"]
 	var caps := [
 		["#ff8a7a", "#e8453c", "#b82a2a", "#7a1a22"],
@@ -756,19 +756,19 @@ static func _traeger(i: Image, design: int, fr: int, W: int, H: int) -> void:
 		var py_ := cy + so.y * 8.0
 		match design:
 			0:
-				blob(i, px_, py_ + 2.0, 5.5, 3.6, stone, 1.0 + s)
+				blob(i, px_, py_ + 1.5, 4.2, 2.8, stone, 1.0 + s)
 			1:
-				rect(i, int(px_) - 5, int(py_), 10, 4, "#8a5a34")
-				rect(i, int(px_) - 5, int(py_), 10, 1, "#b88450")
-				rect(i, int(px_) - 5, int(py_) + 1, 2, 2, "#d9b070")
-				rect(i, int(px_) + 3, int(py_) + 1, 2, 2, "#6b4424")
+				rect(i, int(px_) - 4, int(py_), 8, 3, "#8a5a34")
+				rect(i, int(px_) - 4, int(py_), 8, 1, "#b88450")
+				rect(i, int(px_) - 4, int(py_) + 1, 1, 2, "#d9b070")
+				rect(i, int(px_) + 3, int(py_) + 1, 1, 2, "#6b4424")
 			2:
-				rect(i, int(px_) - 1, int(py_) + 1, 3, 5, "#f0e4cc")
-				rect(i, int(px_) + 1, int(py_) + 1, 1, 5, "#d8c8a8")
-				blob(i, px_, py_ + 0.5, 5.8, 3.2, caps[s % 3], 2.0 + s)
+				rect(i, int(px_) - 1, int(py_) + 1, 2, 4, "#f0e4cc")
+				rect(i, int(px_) + 1, int(py_) + 1, 1, 4, "#d8c8a8")
+				blob(i, px_, py_ + 0.5, 4.6, 2.6, caps[s % 3], 2.0 + s)
 				if s % 3 == 0:
-					rect(i, int(px_) - 3, int(py_) - 1, 2, 1, "#ffffff")
-					rect(i, int(px_) + 1, int(py_), 2, 1, "#ffffff")
+					rect(i, int(px_) - 2, int(py_) - 1, 1, 1, "#ffffff")
+					rect(i, int(px_) + 1, int(py_), 1, 1, "#ffffff")
 	if not mid_done:
 		_traeger_mitte(i, design, fr, cx, cy + 1.6, stone)
 
@@ -778,17 +778,17 @@ static func _traeger_mitte(i: Image, design: int, fr: int, cx: float, cy: float,
 	match design:
 		0:
 			# flache Steinplatte mit einer kleinen Glut
-			blob(i, cx, cy, 7.0, 3.6, stone, 5.0)
+			blob(i, cx, cy, 5.0, 2.6, stone, 5.0)
 			rect(i, x - 1, y - 1, 3, 2, "#4a4552")
 			px(i, x, y - 1, Color("#ff9a30") if fr == 0 else Color("#ffc060"))
 		1:
 			# Lagerfeuer: Steinring, gekreuzte Scheite, Flamme
 			for k in 8:
 				var a := k * TAU / 8.0
-				blob(i, cx + cos(a) * 6.0, cy + 1.0 + sin(a) * 3.2, 2.0, 1.6, stone, 3.0 + k)
-			line(i, x - 5, y + 1, x + 5, y - 2, "#6b4424")
-			line(i, x - 5, y - 2, x + 5, y + 1, "#8a5a34")
-			var fh := 9 if fr == 0 else 11
+				blob(i, cx + cos(a) * 4.2, cy + 1.0 + sin(a) * 2.3, 1.6, 1.3, stone, 3.0 + k)
+			line(i, x - 3, y + 1, x + 3, y - 1, "#6b4424")
+			line(i, x - 3, y - 1, x + 3, y + 1, "#8a5a34")
+			var fh := 7 if fr == 0 else 9
 			poly(i, [Vector2(x - 3, y), Vector2(x + 3, y), Vector2(x + 1, y - fh), Vector2(x - 1, y - fh + 3)], "#ff8a30")
 			poly(i, [Vector2(x - 2, y), Vector2(x + 2, y), Vector2(x, y - fh + 3)], "#ffd060")
 			rect(i, x - 1, y - 3, 2, 3, "#fff4b0")
@@ -821,7 +821,7 @@ const TOOL_OF := {
 	"holzfaeller": "axe", "foerster": "shovel", "steinbruch": "pick", "steinmetz": "hammer", "saegewerk": "saw", "wagner": "hammer",
 	"fischer": "rod", "jaeger": "bow", "farm": "hoe", "garten": "hoe", "kraeuter": "basket", "pilzsammler": "basket",
 	"feensammler": "basket", "pilzhuette": "basket", "obsidian": "pick", "sandgrube": "shovel", "eishauer": "pick",
-	"builder": "hammer", "glashuette": "pipe", "muehle": "sack", "baeckerei": "sack", "metzger": "knife", "kueche": "ladle",
+	"builder": "hammer", "wegebauer": "shovel", "glashuette": "pipe", "muehle": "sack", "baeckerei": "sack", "metzger": "knife", "kueche": "ladle",
 }
 
 static func man_img(role: String, tun: String, hat: String, fr: int) -> Image:
