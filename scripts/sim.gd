@@ -1,6 +1,8 @@
 class_name Sim
 extends RefCounted
-# Welt + Simulation: Karte, Straßennetz (Flaggen/Segmente), Träger, Warenrouting, Gebäude, Tiere.
+# Welt + Simulation: Karte, Wege, frei laufende Träger, Warenverteilung, Gebäude, Tiere.
+# Testvariante ohne Flaggen und Wegträger: Waren liegen in den Gebäuden (Eingang = inbox, Ausgang = outbox).
+# Träger sitzen im Langhaus und in Trägerlagern und holen Waren frei laufend aus den Betrieben im Umkreis.
 
 const MW := Data.MW
 const MH := Data.MH
@@ -10,47 +12,29 @@ const NCX := MW / CH
 const NCY := MH / CH
 const K := Data.K
 const WALK_MULT := 0.75    # Lauftempo aller Pixler
-static var FLAG_CAP := 20    # Balance-Regler (per Kommandozeile ueberschreibbar, siehe main.gd)
-static var BARROW_AT := 4
+const OFFROAD := 0.6       # Tempo-Faktor abseits von Wegen
+const ROAD_SPEED := 1.0    # Tempo-Faktor auf einem Weg (spaeter: gepflasterte Wege schneller)
+const OUT_CAP := 8         # Waren, die in einem Gebaeude auf Abholung warten duerfen
 static var CARRY_N := 1        # Waren pro Traeger
 static var BARROW_N := 3       # Waren pro Traeger mit Schubkarre
 const BARROWS_START := 10
-static var ROAD_SEG := 10      # Zellen bis zur naechsten automatischen Zwischenflagge
 const HQ_POS := Vector2i(93 * K, 90 * K)
 const BUILDERS_BASE := 3
 const BUILDERS_PER_LAGER := 2
+const IDLERS_MAX := 0      # sichtbare freie Pixler am Langhaus
+const SEATS := 10         # Sitzplaetze im Traegerlager
+const DIG_T := 3.0         # Sekunden, bis der Wegebauer eine Wegzelle geschaufelt hat
 
-class Flag:
+class Road:
 	var id: int
-	var x: int
-	var y: int
-	var goods: Array = []
-	var segs: Array = []
-	var bld: int = 0
-
-class Good:
-	var t: String
-	var dest: int = 0
-	var fid: int = 0
-
-class Seg:
-	var id: int
-	var a: int
-	var b: int
 	var cells: Array = []
-	var L: int = 1
-	var p: float = 0.0
-	var st: String = "idle"
-	var load: Array = []
-	var end: int = 0
-	var chk: float = 0.0
-	var barrow: bool = false
-	var idle_t: float = 0.0
-	var bb := Rect2i()          # Zellen-Umriss (Rendering)
+	var bb := Rect2i()                # Zellen-Umriss (Rendering)
 	var pts := PackedVector2Array()   # Rendering-Cache: Weg-Polylinie in Weltkoordinaten
 	var bends := PackedVector2Array()
-	var arr: Array = []      # Anmarschweg des Traegers (Zellen)
-	var arr_d: float = 0.0
+	var own_from: int = 0             # Index in cells, ab dem dieses Wegstueck neu zu graben ist
+	var n_own: int = 0                # Anzahl zu grabender Zellen
+	var dug: int = 0                  # davon schon gegraben (der Wegebauer schaufelt Zelle fuer Zelle)
+	var worker: int = 0               # Wegebauer-Gebaeude, das hier gerade arbeitet
 
 class Bld:
 	var id: int
@@ -59,8 +43,7 @@ class Bld:
 	var y: int
 	var w: int
 	var h: int
-	var fid: int
-	var fids: Array = []
+	var door := Vector2i(0, 0)      # Zelle vor der Tuer (hier werden Waren uebergeben)
 	var done: bool = false
 	var prog: float = 0.0
 	var build_t: float = 8.0
@@ -68,6 +51,7 @@ class Bld:
 	var incoming: Dictionary = {}
 	var cap: Dictionary = {}
 	var stock: Dictionary = {}
+	var outbox: Dictionary = {}     # fertige Waren, die auf einen Traeger warten
 	var st: String = "idle"
 	var timer: float = 0.0
 	var paused: bool = false
@@ -86,20 +70,28 @@ class Bld:
 	var feed_t: float = 20.0
 	var bw: bool = false       # Bauarbeiter arbeitet gerade hier
 	var retry: float = 0.0
-	var keepers: Array = []    # Lagerarbeiter (Langhaus 3, Lagerhaus 1)
-	var out_q: Array = []      # Auslieferungen, die noch vor die Tuer getragen werden muessen
 	var d0: float = 1.0        # Weglaenge der aktuellen Etappe (Fortschrittsanzeige)
 	var ptot: float = 1.0      # Gesamtdauer der aktuellen Phase (Fortschrittsanzeige)
+	var design: int = 0        # Traegerlager: 0 Steinkreis, 1 Lagerfeuer mit Staemmen, 2 Pilze
+	var cn: int = 0            # gewuenschte Anzahl Traeger (0-10)
+	var barrows: int = 0       # Schubkarren im Haus (hoechstens so viele wie Traeger)
+	var carriers: Array = []
+	var job: int = 0           # Wegebauer: Weg, der gerade gegraben wird
 
-class Keeper:
-	# Lagerarbeiter: tragen Waren aus dem Lager Stueck fuer Stueck vor die Tuer
-	var home: Vector2          # Punkt im Gebaeude (hinter der Tuer)
+class Carrier:
+	var hub: int
 	var x: float = 0.0
 	var y: float = 0.0
-	var st: String = "idle"    # idle | load | go | drop | back
+	var st: String = "enter"   # sit | exit | go | pick | carry | drop | ret | enter
+	var seat: int = 0
+	var path: Array = []
+	var k: float = 0.0
+	var load: Array = []       # [{t, dst}] bereits reserviert
+	var src: int = 0           # Gebaeude, aus dem die Ware geholt wird (0 = schon aufgeladen)
+	var to: int = 0            # Ziel der aktuellen Etappe
 	var t: float = 0.0
-	var job = null             # {t, dest, fid}
 	var face: int = 1
+	var barrow: bool = false
 
 class Builder:
 	var site: int
@@ -142,7 +134,8 @@ var stump := PackedByteArray()
 var age := PackedFloat32Array()
 var occ := PackedInt32Array()
 var road := PackedInt32Array()
-var flag := PackedInt32Array()
+var plan := PackedInt32Array()    # Zelle -> Weg, der dort noch gegraben werden soll
+var doorc := PackedInt32Array()  # Zelle -> Gebaeude, dessen Tuer-Zelle sie ist
 var field := PackedInt32Array()
 var chunk_obj: Array = []     # pro Chunk: Dictionary Zelle -> true fuer alle Zellen mit Objekt
 var chunk_stump: Array = []
@@ -150,25 +143,22 @@ var chunk_stump: Array = []
 var t: float = 0.0
 var nid: int = 1
 var blds: Dictionary = {}
-var flags: Dictionary = {}
-var segs: Dictionary = {}
+var roads: Dictionary = {}
 var claims: Dictionary = {}
 var growing: Dictionary = {}
 var animals: Array = []
 var balloons: Array = []
 var idlers: Array = []
-var net_ver: int = 0
+var net_ver: int = 0           # zaehlt jede Aenderung an Gebaeuden/Wegen (macht gemerkte Laufwege ungueltig)
 var pop: int = Data.START_POP
 var free_now: int = Data.START_POP
 var builders: Array = []
-var dlink := PackedByteArray()   # Bit1: Weg nach (x+1,y+1), Bit2: Weg nach (x-1,y+1)
 var barrows_free: int = BARROWS_START
 var barrows_total: int = BARROWS_START
 var meals: int = 0
 var landmarks: Dictionary = {}
 var events: Array = []   # [kind, text, x, y]  fuer UI/Partikel
-var _dcache: Dictionary = {}
-var _acc_disp: float = 0.0
+var _rcache: Dictionary = {}
 var _acc_eco: float = 0.0
 var rng := RandomNumberGenerator.new()
 
@@ -207,14 +197,12 @@ func set_stump(i: int, v: int) -> void:
 func gen(s: int) -> void:
 	seed_ = s
 	rng.seed = s
-	dlink.resize(NT)
-	dlink.fill(0)
 	for arr in [ground, obj, stage, amt, stump]:
 		arr.resize(NT)
 		arr.fill(0)
 	age.resize(NT)
 	age.fill(0.0)
-	for arr in [occ, road, flag, field]:
+	for arr in [occ, road, plan, doorc, field]:
 		arr.resize(NT)
 		arr.fill(0)
 	chunk_obj = []
@@ -405,10 +393,8 @@ func used_workers() -> int:
 	var n := 0
 	for b in blds.values():
 		var k: String = Data.BD[b.type].kind
-		if k != "store" and k != "lm" and k != "house":
+		if k != "store" and k != "lm" and k != "house" and k != "hub" and k != "pile":
 			n += 1
-		elif k == "store":
-			n += b.keepers.size()
 	return n
 
 func pop_cap() -> int:
@@ -445,20 +431,21 @@ func total_stock(g: String) -> int:
 	return n
 
 func carrier_count() -> int:
+	# Pixler, die als Traeger arbeiten: sitzende und laufende Traeger (Langhaus und Traegerlager)
 	var n := 0
-	for s in segs.values():
-		if s.st != "wait_car":
-			n += 1
+	for b in blds.values():
+		n += b.carriers.size()
 	return n
 
 func free_pixlers() -> int:
 	return pop - used_workers() - carrier_count() - builders_active()
 
 func waiting_for_pixler() -> int:
+	# Traeger-Plaetze, die ohne freien Pixler leer bleiben
 	var n := 0
-	for s in segs.values():
-		if s.st == "wait_car":
-			n += 1
+	for b in blds.values():
+		if b.done and Data.BD[b.type].has("hub"):
+			n += maxi(0, b.cn - b.carriers.size())
 	return n
 
 func no_obj(i: int) -> bool:
@@ -471,7 +458,7 @@ func clear_soft(i: int) -> void:
 		set_obj(i, 0)
 
 func free_ground(i: int) -> bool:
-	return Data.WALK[ground[i]] == 1 and no_obj(i) and occ[i] == 0 and road[i] == 0 and flag[i] == 0 and field[i] == 0
+	return Data.WALK[ground[i]] == 1 and no_obj(i) and occ[i] == 0 and road[i] == 0 and field[i] == 0
 
 func standable(i: int) -> bool:
 	return Data.WALK[ground[i]] == 1 and no_obj(i) and occ[i] == 0
@@ -511,9 +498,9 @@ func scan(kind: String, cx: int, cy: int, R: int) -> Array:
 				"plant": ok = free_ground(i) and (ground[i] == T.GRASS or ground[i] == T.SNOW or ground[i] == T.SWAMP)
 				"sand": ok = ground[i] == T.DESERT and free_ground(i)
 				"field": ok = ground[i] == T.GRASS and free_ground(i)
-				"fish": ok = standable(i) and road[i] == 0 and flag[i] == 0 and near_ground(xx, yy, [T.DEEP, T.WATER])
-				"ice": ok = standable(i) and road[i] == 0 and flag[i] == 0 and near_ground(xx, yy, [T.ICE])
-				"lava": ok = standable(i) and road[i] == 0 and flag[i] == 0 and near_ground(xx, yy, [T.LAVA])
+				"fish": ok = standable(i) and road[i] == 0 and near_ground(xx, yy, [T.DEEP, T.WATER])
+				"ice": ok = standable(i) and road[i] == 0 and near_ground(xx, yy, [T.ICE])
+				"lava": ok = standable(i) and road[i] == 0 and near_ground(xx, yy, [T.LAVA])
 			if ok:
 				out.append(Vector2i(xx, yy))
 	return out
@@ -531,23 +518,23 @@ func has_resource(type: String, x: int, y: int) -> bool:
 		return false
 	return scan(d.need, cx, cy, d.R).size() > 0
 
-# ---------------------------------------------------------------- Straßen
-func get_flag_at(x: int, y: int):
-	var f: int = flag[y * MW + x]
-	return flags[f] if f != 0 else null
+# ---------------------------------------------------------------- Wege
+func roads_unlocked() -> bool:
+	# Wege gibt es erst, wenn ein Wegebauer steht
+	for b in blds.values():
+		if b.type == "wegebauer" and b.done:
+			return true
+	return false
 
-func _mk_seg(a: Flag, b: Flag, cells: Array, instant: bool = true) -> Seg:
-	var s := Seg.new()
-	s.id = nid
+func spd_at(i: int) -> float:
+	# Tempo-Faktor der Zelle: abseits von Wegen langsamer
+	return OFFROAD if road[i] == 0 else ROAD_SPEED
+
+func _mk_road(cells: Array) -> Road:
+	var r := Road.new()
+	r.id = nid
 	nid += 1
-	s.a = a.id
-	s.b = b.id
-	s.cells = cells
-	s.L = cells.size() - 1
-	s.p = s.L * 0.5
-	s.chk = rng.randf() * 0.3
-	if not instant:
-		s.st = "wait_car"
+	r.cells = cells
 	var mnx := 99999
 	var mny := 99999
 	var mxx := -1
@@ -557,147 +544,168 @@ func _mk_seg(a: Flag, b: Flag, cells: Array, instant: bool = true) -> Seg:
 		mny = mini(mny, c[1])
 		mxx = maxi(mxx, c[0])
 		mxy = maxi(mxy, c[1])
-	s.bb = Rect2i(mnx, mny, mxx - mnx + 1, mxy - mny + 1)
-	for k in range(1, cells.size() - 1):
-		road[cells[k][1] * MW + cells[k][0]] = s.id
-	_set_dlinks(cells, true)
-	a.segs.append(s)
-	b.segs.append(s)
-	segs[s.id] = s
+	r.bb = Rect2i(mnx, mny, mxx - mnx + 1, mxy - mny + 1)
+	roads[r.id] = r
 	net_ver += 1
-	return s
+	return r
 
-func _set_dlinks(cells: Array, on: bool) -> void:
-	for k in range(cells.size() - 1):
-		var c1: Array = cells[k]
-		var c2: Array = cells[k + 1]
-		if c1[0] == c2[0] or c1[1] == c2[1]:
+func add_road(cells: Array) -> Array:
+	# Plant den Weg, aber nur auf Zellen ohne Weg (Abschnitte, die schon Weg sind, bleiben wie sie sind).
+	# Gegraben wird spaeter von einem Wegebauer (siehe _upd_digger). Gibt die IDs der neuen Wegstuecke zurueck.
+	var ids: Array = []
+	var n := cells.size()
+	var k := 0
+	while k < n:
+		var i0: int = cells[k][1] * MW + cells[k][0]
+		if road[i0] != 0 or plan[i0] != 0:
+			k += 1
 			continue
-		# obere Zelle + Richtung der unteren
-		var top: Array = c1 if c1[1] < c2[1] else c2
-		var bot: Array = c2 if c1[1] < c2[1] else c1
-		var bit := 1 if bot[0] > top[0] else 2
-		var i: int = top[1] * MW + top[0]
-		if on:
-			dlink[i] |= bit
-		else:
-			dlink[i] &= ~bit
+		var e := k
+		while e + 1 < n and road[cells[e + 1][1] * MW + cells[e + 1][0]] == 0 and plan[cells[e + 1][1] * MW + cells[e + 1][0]] == 0:
+			e += 1
+		var r := _mk_road(cells.slice(maxi(k - 1, 0), mini(e + 2, n)))
+		r.own_from = 1 if k > 0 else 0
+		r.n_own = e - k + 1
+		for q in range(k, e + 1):
+			var ci: int = cells[q][1] * MW + cells[q][0]
+			plan[ci] = r.id
+			field[ci] = 0
+			clear_soft(ci)
+		ids.append(r.id)
+		k = e + 1
+	return ids
 
-func create_flag(x: int, y: int) -> Flag:
-	var i := y * MW + x
-	if flag[i] != 0:
-		return flags[flag[i]]
-	var f := Flag.new()
-	f.id = nid
-	nid += 1
-	f.x = x
-	f.y = y
-	field[i] = 0
-	if road[i] != 0:
-		var s: Seg = segs[road[i]]
-		var k := 0
-		for c in range(s.cells.size()):
-			if s.cells[c][0] == x and s.cells[c][1] == y:
-				k = c
-				break
-		var fa: Flag = flags[s.a]
-		var fb: Flag = flags[s.b]
-		var c1: Array = s.cells.slice(0, k + 1)
-		var c2: Array = s.cells.slice(k)
-		var carried: Array = s.load
-		s.load = []
-		_del_seg(s, false)
-		road[i] = 0
-		flag[i] = f.id
-		flags[f.id] = f
-		_mk_seg(fa, f, c1)
-		_mk_seg(f, fb, c2)
-		for cg in carried:
-			cg.fid = fa.id
-			fa.goods.append(cg)
-	else:
-		flag[i] = f.id
-		flags[f.id] = f
-		net_ver += 1
-	return f
+func road_done(r: Road) -> bool:
+	return r.dug >= r.n_own
 
-func _del_seg(s: Seg, cleanup: bool) -> void:
-	_set_dlinks(s.cells, false)
-	for k in range(1, s.cells.size() - 1):
-		var i: int = s.cells[k][1] * MW + s.cells[k][0]
-		if road[i] == s.id:
+func _dig_cell(r: Road) -> Vector2i:
+	var c: Array = r.cells[r.own_from + r.dug]
+	return Vector2i(c[0], c[1])
+
+func _upd_digger(b: Bld, dt: float) -> void:
+	# Der Wegebauer-Pixler laeuft zu einem geplanten Weg und schaufelt ihn Zelle fuer Zelle frei
+	var dp := door_pos(b)
+	var r = roads.get(b.job)
+	if b.st != "idle" and b.st != "back" and (r == null or road_done(r)):
+		if r != null:
+			r.worker = 0
+		b.job = 0
+		b.st = "back"
+	match b.st:
+		"idle":
+			b.busy = false
+			b.timer -= dt
+			if b.timer > 0.0:
+				return
+			b.timer = 1.0
+			var best = null
+			var bv := 1e9
+			for q in roads.values():
+				if road_done(q) or (q.worker != 0 and blds.has(q.worker)):
+					continue
+				var v := Vector2(_dig_cell(q)).distance_to(Vector2(b.door))
+				if v < bv:
+					bv = v
+					best = q
+			if best == null:
+				b.msg = "Bereit: Wege (R) möglich"
+				return
+			best.worker = b.id
+			b.job = best.id
+			b.wx = dp.x
+			b.wy = dp.y
+			b.st = "walk"
+			b.msg = "Geht zum neuen Weg"
+		"walk", "back":
+			b.busy = true
+			var tgt := dp
+			if b.st == "walk":
+				var c := _dig_cell(r)
+				tgt = Vector2(c.x + 0.5, c.y + 0.5)
+			var dv := tgt - Vector2(b.wx, b.wy)
+			var step := 2.3 * K * WALK_MULT * dt
+			if dv.length() <= step:
+				b.wx = tgt.x
+				b.wy = tgt.y
+				if b.st == "walk":
+					b.st = "act"
+					b.timer = DIG_T
+					b.ptot = DIG_T
+					b.msg = "Schaufelt den Weg"
+				else:
+					b.st = "idle"
+					b.timer = 0.5
+					b.busy = false
+			else:
+				dv = dv.normalized() * step
+				b.wx += dv.x
+				b.wy += dv.y
+				if absf(dv.x) > 0.01:
+					b.face = 1 if dv.x > 0 else -1
+		"act":
+			b.busy = true
+			b.timer -= dt
+			if b.timer <= 0.0:
+				var c := _dig_cell(r)
+				var ci := c.y * MW + c.x
+				road[ci] = r.id
+				plan[ci] = 0
+				r.dug += 1
+				r.pts = PackedVector2Array()
+				net_ver += 1
+				if road_done(r):
+					r.worker = 0
+					b.job = 0
+					b.st = "back"
+				else:
+					b.st = "walk"
+
+func _del_road(r: Road) -> void:
+	for c in r.cells:
+		var i: int = c[1] * MW + c[0]
+		if road[i] == r.id:
 			road[i] = 0
-	var fa = flags.get(s.a)
-	var fb = flags.get(s.b)
-	if fa: fa.segs.erase(s)
-	if fb: fb.segs.erase(s)
-	segs.erase(s.id)
-	if s.barrow:
-		barrows_free += 1
-		s.barrow = false
-	if cleanup:
-		for lg in s.load:
-			kill_good(lg)
-		s.load = []
-	net_ver += 1
-	if cleanup:
-		for f in [fa, fb]:
-			if f != null and f.segs.is_empty() and f.bld == 0:
-				remove_flag(f)
-
-func remove_flag(f: Flag) -> void:
-	if f.bld != 0:
-		return
-	for s in f.segs.duplicate():
-		_del_seg(s, false)
-		for lg in s.load:
-			kill_good(lg)
-		s.load = []
-		var o = flags.get(s.b if s.a == f.id else s.a)
-		if o != null and o.segs.is_empty() and o.bld == 0:
-			remove_flag(o)
-	for g in f.goods:
-		kill_good(g)
-	flag[f.y * MW + f.x] = 0
-	flags.erase(f.id)
+		if plan[i] == r.id:
+			plan[i] = 0
+	roads.erase(r.id)
 	net_ver += 1
 
-func remove_seg_at(x: int, y: int) -> bool:
-	var i := y * MW + x
-	if road[i] != 0:
-		_del_seg(segs[road[i]], true)
-		return true
-	if flag[i] != 0:
-		var f: Flag = flags[flag[i]]
-		if f.bld == 0:
-			remove_flag(f)
-			return true
-	return false
+func undo_road(ids: Array) -> bool:
+	var any := false
+	for id in ids:
+		var r = roads.get(id)
+		if r != null:
+			_del_road(r)
+			any = true
+	return any
 
-func kill_good(g: Good) -> void:
-	var b = blds.get(g.dest)
-	if b != null:
-		b.incoming[g.t] = maxi(0, b.incoming.get(g.t, 0) - 1)
-	g.dest = -1
+func remove_road_at(x: int, y: int) -> bool:
+	var rid: int = road[y * MW + x]
+	if rid == 0:
+		return false
+	_del_road(roads[rid])
+	return true
 
-func passable(x: int, y: int, goal: bool, walk: bool = false) -> bool:
+# ---------------------------------------------------------------- Laufwege
+func passable(x: int, y: int) -> bool:
 	if not inb(x, y):
 		return false
 	var i := y * MW + x
-	if Data.WALK[ground[i]] == 0 or not no_obj(i) or occ[i] != 0:
-		return false
-	if road[i] != 0 and not goal and not walk:
-		return false
-	return true
+	return Data.WALK[ground[i]] == 1 and no_obj(i) and occ[i] == 0
 
 const DIRS8 := [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]
 
-func find_path(sx: int, sy: int, gx: int, gy: int, walk: bool = false) -> Array:
-	# 8 Richtungen (Diagonalen wie bei Siedler 2). walk=true: Pixler laufen auch ueber Wege.
+func find_path(sx: int, sy: int, gx: int, gy: int, build: bool = true, margin: int = 80) -> Array:
+	# 8 Richtungen (Diagonalen wie bei Siedler 2).
+	# build=true: Wegebau (Kurvenstrafe, vorhandene Wege sind guenstig). build=false: Laufweg (schnellste Zeit).
 	if sx == gx and sy == gy:
 		return []
-	if not passable(gx, gy, true, walk):
+	if not passable(gx, gy):
 		return []
+	var bx0 := maxi(0, mini(sx, gx) - margin)
+	var bx1 := mini(MW - 1, maxi(sx, gx) + margin)
+	var by0 := maxi(0, mini(sy, gy) - margin)
+	var by1 := mini(MH - 1, maxi(sy, gy) + margin)
 	var open: Array = []
 	_hpush(open, 0.0, sy * MW + sx)
 	var came := {}
@@ -705,6 +713,7 @@ func find_path(sx: int, sy: int, gx: int, gy: int, walk: bool = false) -> Array:
 	var goal := gy * MW + gx
 	var closed := {}
 	var expanded := 0
+	var hf := 0.6 if build else 1.0 / ROAD_SPEED
 	while open.size() > 0:
 		var cur: int = _hpop(open)
 		if closed.has(cur):
@@ -732,34 +741,49 @@ func find_path(sx: int, sy: int, gx: int, gy: int, walk: bool = false) -> Array:
 		for d in DIRS8:
 			var nx: int = cx + d[0]
 			var ny: int = cy + d[1]
-			var ni := ny * MW + nx
-			if closed.has(ni) or not passable(nx, ny, ni == goal, walk):
+			if nx < bx0 or nx > bx1 or ny < by0 or ny > by1:
 				continue
-			var cost := 1.0
-			# Kleine Kurvenstrafe: Wege bleiben gerade statt zu zacken
-			if not walk and (d[0] != pdx or d[1] != pdy) and (pdx != 0 or pdy != 0):
-				cost += 0.12
+			var ni := ny * MW + nx
+			if closed.has(ni) or not passable(nx, ny):
+				continue
+			var sl := 1.0
 			if d[0] != 0 and d[1] != 0:
-				# Diagonale: keine Ecken schneiden, keine X-Kreuzung mit anderen Wegen
-				if not passable(cx + d[0], cy, true, true) or not passable(cx, cy + d[1], true, true):
+				# Diagonale: keine Ecken schneiden
+				if not passable(cx + d[0], cy) or not passable(cx, cy + d[1]):
 					continue
-				if not walk:
-					var sa: int = cy * MW + cx + d[0]
-					var sb: int = (cy + d[1]) * MW + cx
-					if (road[sa] != 0 or flag[sa] != 0) and (road[sb] != 0 or flag[sb] != 0):
-						continue
-				cost += 0.4142
-			if walk and (road[ni] != 0 or flag[ni] != 0):
-				cost *= 0.6
+				sl = 1.4142
+			var cost := sl
+			if build:
+				if road[ni] != 0:
+					cost *= 0.6
+			else:
+				cost = sl / spd_at(ni)
+			# Kleine Kurvenstrafe: Wege bleiben gerade statt zu zacken
+			if (d[0] != pdx or d[1] != pdy) and (pdx != 0 or pdy != 0):
+				cost += 0.12 if build else 0.03
 			var ng: float = gs[cur] + cost
 			if not gs.has(ni) or ng < gs[ni]:
 				gs[ni] = ng
 				came[ni] = cur
 				var ddx: float = abs(gx - nx)
 				var ddy: float = abs(gy - ny)
-				var hh: float = ((ddx + ddy) - 0.5858 * minf(ddx, ddy)) * (0.6 if walk else 1.001)
+				var hh: float = ((ddx + ddy) - 0.5858 * minf(ddx, ddy)) * hf
 				_hpush(open, ng + hh, ni)
 	return []
+
+func route(sx: int, sy: int, gx: int, gy: int) -> Array:
+	# Gemerkter Laufweg (Zellen). Leer = nicht erreichbar. Das Ergebnis darf nicht veraendert werden.
+	if sx == gx and sy == gy:
+		return [[sx, sy]]
+	var key: int = ((sy * MW + sx) << 20) | (gy * MW + gx)
+	var c = _rcache.get(key)
+	if c != null and c.v == net_ver and t - c.t < 40.0:
+		return c.p
+	if _rcache.size() > 800:
+		_rcache.clear()
+	var p := find_path(sx, sy, gx, gy, false, 40)
+	_rcache[key] = {"v": net_ver, "t": t, "p": p}
+	return p
 
 func _hpush(h: Array, f: float, v: int) -> void:
 	h.append([f, v])
@@ -796,477 +820,393 @@ func _hpop(h: Array) -> int:
 			i = m
 	return top
 
-func add_road(cells: Array) -> bool:
-	var n := cells.size()
+func _follow(o, dt: float, base: float) -> bool:
+	# Laeuft o (Traeger oder Bauarbeiter) entlang o.path. true, wenn das Ende erreicht ist.
+	var n: int = o.path.size()
 	if n < 2:
-		return false
-	var bp: Array = [0]
-	var last := 0
-	for k in range(1, n):
-		var isf: bool = flag[cells[k][1] * MW + cells[k][0]] != 0
-		if isf or k == n - 1:
-			bp.append(k)
-			last = k
-		elif k - last >= ROAD_SEG and n - 1 - k >= ROAD_SEG / 2:
-			bp.append(k)
-			last = k
-		clear_soft(cells[k][1] * MW + cells[k][0])
-	var fl: Array = []
-	for k in bp:
-		fl.append(create_flag(cells[k][0], cells[k][1]))
-	for j in range(bp.size() - 1):
-		_mk_seg(fl[j], fl[j + 1], cells.slice(bp[j], bp[j + 1] + 1), false)
-		# Segmentzellen, die noch als Feld markiert waren, freigeben
-		for k in range(bp[j], bp[j + 1] + 1):
-			field[cells[k][1] * MW + cells[k][0]] = 0
-	return true
-
-func undo_road(cells: Array) -> bool:
-	var any := false
-	for c in cells:
-		var i: int = c[1] * MW + c[0]
-		if road[i] != 0:
-			_del_seg(segs[road[i]], true)
-			any = true
-	# uebrig gebliebene, unverbundene Endflaggen ohne Gebaeude entfernen
-	for c in cells:
-		var i: int = c[1] * MW + c[0]
-		if flag[i] != 0:
-			var f: Flag = flags[flag[i]]
-			if f.segs.is_empty() and f.bld == 0:
-				remove_flag(f)
-				any = true
-	return any
-
-# ---------------------------------------------------------------- Routing
-func dist_map(src: int) -> Dictionary:
-	var c = _dcache.get(src)
-	if c != null and c.ver == net_ver:
-		return c.d
-	var d := {src: 0.0}
-	var open: Array = [src]
-	var done := {}
-	while open.size() > 0:
-		var bi := 0
-		var bv: float = d[open[0]]
-		for i in range(1, open.size()):
-			if d[open[i]] < bv:
-				bv = d[open[i]]
-				bi = i
-		var u: int = open[bi]
-		open.remove_at(bi)
-		if done.has(u):
-			continue
-		done[u] = true
-		for s in flags[u].segs:
-			var o: int = s.b if s.a == u else s.a
-			var nd: float = bv + s.L
-			if not d.has(o) or nd < d[o]:
-				d[o] = nd
-				open.append(o)
-	_dcache[src] = {"ver": net_ver, "d": d}
-	return d
-
-func _dd(b, fid: int) -> float:
-	# kleinste Wegdistanz von Flagge fid zu einer Tuer von Gebaeude b
-	var best := 1e9
-	for k in b.fids:
-		var v: float = dist_map(k).get(fid, 1e9)
-		if v < best:
-			best = v
-	return best
-
-func _dd2(b1, b2) -> Array:
-	# [distanz, flagge_an_b2] zwischen den Tueren zweier Gebaeude
-	var best := 1e9
-	var bf := -1
-	for k2 in b2.fids:
-		var dm := dist_map(k2)
-		for k1 in b1.fids:
-			var v: float = dm.get(k1, 1e9)
-			if v < best:
-				best = v
-				bf = k2
-	return [best, bf]
-
-func next_seg(g: Good, f: Flag):
-	var b = blds.get(g.dest)
-	if b == null or f.id in b.fids:
-		return null
-	if _dd(b, f.id) >= 1e8:
-		return null
-	var best = null
-	var bv := 1e9
-	for s in f.segs:
-		var o: int = s.b if s.a == f.id else s.a
-		var v: float = s.L + _dd(b, o)
-		if v < bv:
-			bv = v
-			best = s
-	return best if bv < 1e8 else null
-
-func wants(g: Good, f: Flag, s: Seg) -> bool:
-	if g.dest <= 0:
-		return false
-	if next_seg(g, f) != s:
-		return false
-	var o: Flag = flags[s.b] if s.a == f.id else flags[s.a]
-	if o.goods.size() < FLAG_CAP:
 		return true
-	var b = blds.get(g.dest)
-	return b != null and o.id in b.fids
+	var k := clampi(int(floor(o.k)), 0, n - 2)
+	var a: Array = o.path[k]
+	var b: Array = o.path[k + 1]
+	var sl := 1.0 if (a[0] == b[0] or a[1] == b[1]) else 1.4142
+	o.k = minf(o.k + base * spd_at(b[1] * MW + b[0]) * dt / sl, float(n - 1))
+	k = clampi(int(floor(o.k)), 0, n - 2)
+	a = o.path[k]
+	b = o.path[k + 1]
+	var fr: float = o.k - k
+	var nx: float = lerpf(a[0], b[0], fr) + 0.5
+	var ny: float = lerpf(a[1], b[1], fr) + 0.5
+	if absf(nx - o.x) > 0.001:
+		o.face = 1 if nx > o.x else -1
+	o.x = nx
+	o.y = ny
+	return o.k >= n - 1 - 0.0001
+
+func _glide(o, tgt: Vector2, dt: float) -> bool:
+	# geradeaus im Gebaeude (Sitzplatz <-> Tuer), true bei Ankunft
+	var dv := tgt - Vector2(o.x, o.y)
+	var step := 2.3 * K * WALK_MULT * dt
+	if dv.length() <= step:
+		o.x = tgt.x
+		o.y = tgt.y
+		return true
+	dv = dv.normalized() * step
+	o.x += dv.x
+	o.y += dv.y
+	if absf(dv.x) > 0.01:
+		o.face = 1 if dv.x > 0 else -1
+	return false
+
+# ---------------------------------------------------------------- Traeger
+func door_pos(b) -> Vector2:
+	return Vector2(b.door.x + 0.5, b.door.y + 0.5)
+
+func is_hub(b) -> bool:
+	return b.done and Data.BD[b.type].has("hub")
+
+static func seat_off(i: int) -> Vector2:
+	# Sitzplaetze liegen auf einer Ellipse um die Mitte (in Zellen); Art.gd zeichnet die Sitze an denselben Stellen
+	var a := TAU * (float(i) + 0.5) / SEATS + 0.2
+	return Vector2(cos(a) * 1.7, sin(a) * 1.0 + 0.15)
+
+func seat_pos(b, i: int) -> Vector2:
+	return Vector2(b.x + b.w * 0.5, b.y + b.h * 0.5) + seat_off(i)
+
+func hub_covers(b) -> bool:
+	# Gibt es ein besetztes Traegerlager (oder das Langhaus), das dieses Gebaeude erreicht?
+	var c := Vector2(b.x + b.w * 0.5, b.y + b.h * 0.5)
+	for h in blds.values():
+		if is_hub(h) and h.carriers.size() > 0:
+			if Vector2(h.x + h.w * 0.5, h.y + h.h * 0.5).distance_to(c) <= float(Data.BD[h.type].R):
+				return true
+	return false
+
+func set_carriers(b, n: int) -> void:
+	b.cn = clampi(n, 0, Data.CARRIERS_MAX)
+	if b.barrows > b.cn:
+		set_barrows(b, b.cn)
+
+func set_barrows(b, n: int) -> void:
+	# Schubkarren kommen aus dem gemeinsamen Vorrat; hoechstens so viele wie Traeger
+	n = clampi(n, 0, b.cn)
+	var delta: int = n - b.barrows
+	if delta > 0:
+		delta = mini(delta, barrows_free)
+	barrows_free -= delta
+	b.barrows += delta
+
+func outbox_total(b) -> int:
+	var n := 0
+	for k in b.outbox:
+		n += b.outbox[k]
+	return n
+
+func _goods_of(s) -> Dictionary:
+	return s.stock if Data.BD[s.type].kind == "store" else s.outbox
+
+func _reach(pos: Vector2, s) -> bool:
+	return not route(int(pos.x), int(pos.y), s.door.x, s.door.y).is_empty()
+
+func _reach_b(s, d) -> bool:
+	return not route(s.door.x, s.door.y, d.door.x, d.door.y).is_empty()
+
+func _take(s, g: String, d) -> void:
+	# Die Ware wird fest eingeplant: aus dem Ausgang der Quelle genommen, beim Ziel als unterwegs vermerkt
+	var goods: Dictionary = _goods_of(s)
+	goods[g] = goods.get(g, 0) - 1
+	d.incoming[g] = d.incoming.get(g, 0) + 1
+
+func _find_work(hub: Bld, c: Carrier, pos: Vector2):
+	# Sucht Waren im Umkreis des Lagers, die jemand braucht (oder die ins Lager sollen).
+	# Rueckgabe: {"src": Gebaeude-ID, "items": [{t, dst}]} (bereits reserviert) oder null.
+	var R: float = Data.BD[hub.type].R
+	var hc := Vector2(hub.x + hub.w * 0.5, hub.y + hub.h * 0.5)
+	var cap: int = BARROW_N if c.barrow else CARRY_N
+	var demand: Array = []     # [Gebaeude, Ware]
+	var stores: Array = []
+	for b in blds.values():
+		if Vector2(b.x + b.w * 0.5, b.y + b.h * 0.5).distance_to(hc) > R:
+			continue
+		if b.done and Data.BD[b.type].kind == "store":
+			stores.append(b)
+			continue
+		for g in b.cap:
+			if miss(b, g) > 0:
+				demand.append([b, g])
+	var cands: Array = []      # [Schluessel, Quelle, Ware, Ziel]
+	for s in blds.values():
+		if not s.done or Vector2(s.x + s.w * 0.5, s.y + s.h * 0.5).distance_to(hc) > R:
+			continue
+		var is_store: bool = Data.BD[s.type].kind == "store"
+		var goods: Dictionary = _goods_of(s)
+		var sdp := door_pos(s)
+		var sv := pos.distance_to(sdp)
+		for g in goods:
+			if goods[g] <= 0:
+				continue
+			var best = null
+			var bk := 1e9
+			for dm in demand:
+				if dm[1] != g or dm[0] == s:
+					continue
+				var dd: Bld = dm[0]
+				# Baustellen zuerst (Prioritaet), sonst der naechste Abnehmer
+				var key := sdp.distance_to(door_pos(dd)) - (40.0 if not dd.done else 0.0) - 15.0 * dd.prio
+				if key < bk:
+					bk = key
+					best = dd
+			if best == null and not is_store:
+				for st in stores:
+					if st == s:
+						continue
+					var key2 := sdp.distance_to(door_pos(st)) + 60.0
+					if key2 < bk:
+						bk = key2
+						best = st
+			if best != null:
+				cands.append([sv + bk, s, g, best])
+	if cands.is_empty():
+		return null
+	cands.sort_custom(func(p, q): return p[0] < q[0])
+	var checked := {}
+	for cd in cands:
+		var s: Bld = cd[1]
+		if checked.has(s.id):
+			continue
+		checked[s.id] = true
+		if checked.size() > 5:
+			break
+		if not _reach(pos, s):
+			continue
+		var items: Array = []
+		for cd2 in cands:
+			if cd2[1] != s:
+				continue
+			var g2: String = cd2[2]
+			var d2: Bld = cd2[3]
+			var d2_store: bool = d2.done and Data.BD[d2.type].kind == "store"
+			while items.size() < cap and _goods_of(s).get(g2, 0) > 0 and (d2_store or miss(d2, g2) > 0):
+				if not _reach_b(s, d2):
+					break
+				_take(s, g2, d2)
+				items.append({"t": g2, "dst": d2.id})
+		if not items.is_empty():
+			return {"src": s.id, "items": items}
+	return null
+
+func _dump(it: Dictionary, pos: Vector2) -> void:
+	# Ware, die ihr Ziel nicht mehr erreicht, kommt ins naechste Lager (oder geht verloren)
+	var db = blds.get(it.dst)
+	if db != null:
+		db.incoming[it.t] = maxi(0, db.incoming.get(it.t, 0) - 1)
+	var s = _nearest_store(pos.x, pos.y)
+	if s != null:
+		s.stock[it.t] = s.stock.get(it.t, 0) + 1
+
+func _deliver(it: Dictionary, b: Bld) -> void:
+	if b.done and Data.BD[b.type].kind == "store":
+		b.stock[it.t] = b.stock.get(it.t, 0) + 1
+	else:
+		b.inbox[it.t] = b.inbox.get(it.t, 0) + 1
+	b.incoming[it.t] = maxi(0, b.incoming.get(it.t, 0) - 1)
+
+func _cell_of(c) -> Vector2i:
+	return Vector2i(int(c.x), int(c.y))
+
+func _go_src(hub: Bld, c: Carrier) -> void:
+	var s = blds.get(c.src)
+	if s == null:
+		_abort(hub, c)
+		return
+	var cc := _cell_of(c)
+	var p := route(cc.x, cc.y, s.door.x, s.door.y)
+	if p.is_empty():
+		_abort(hub, c)
+		return
+	c.path = p
+	c.k = 0.0
+	c.st = "go" if p.size() > 1 else "pick"
+	c.t = 0.5
+
+func _next_leg(hub: Bld, c: Carrier) -> void:
+	# naechstes Ziel unter den geladenen Waren: das naechstgelegene
+	while not c.load.is_empty():
+		var pos := Vector2(c.x, c.y)
+		var best := -1
+		var bv := 1e9
+		for k in c.load.size():
+			var db = blds.get(c.load[k].dst)
+			if db == null:
+				continue
+			var v := pos.distance_to(door_pos(db))
+			if v < bv:
+				bv = v
+				best = k
+		if best < 0:
+			for it in c.load:
+				_dump(it, pos)
+			c.load = []
+			break
+		var dst: Bld = blds[c.load[best].dst]
+		var cc := _cell_of(c)
+		var p := route(cc.x, cc.y, dst.door.x, dst.door.y)
+		if p.is_empty():
+			# nicht erreichbar: alle Waren fuer dieses Ziel ins Lager
+			var rest: Array = []
+			for it in c.load:
+				if it.dst == dst.id:
+					_dump(it, pos)
+				else:
+					rest.append(it)
+			c.load = rest
+			continue
+		c.to = dst.id
+		c.path = p
+		c.k = 0.0
+		c.st = "carry" if p.size() > 1 else "drop"
+		c.t = 0.4
+		return
+	_finish_trip(hub, c)
+
+func _finish_trip(hub: Bld, c: Carrier) -> void:
+	# Weiter zum naechsten Auftrag in der Naehe, sonst zurueck ins Lager
+	var job = _find_work(hub, c, Vector2(c.x, c.y))
+	if job != null:
+		c.src = job.src
+		c.load = job.items
+		_go_src(hub, c)
+		return
+	_return(hub, c)
+
+func _return(hub: Bld, c: Carrier) -> void:
+	var cc := _cell_of(c)
+	var p := route(cc.x, cc.y, hub.door.x, hub.door.y)
+	if p.size() > 1:
+		c.path = p
+		c.k = 0.0
+		c.st = "ret"
+	else:
+		var dp := door_pos(hub)
+		c.x = dp.x
+		c.y = dp.y
+		c.st = "enter"
+
+func _abort(hub: Bld, c: Carrier) -> void:
+	var pos := Vector2(c.x, c.y)
+	for it in c.load:
+		_dump(it, pos)
+	c.load = []
+	c.src = 0
+	c.t = 0.0
+	if c.st == "exit":
+		c.st = "enter"
+	else:
+		_return(hub, c)
+
+func _upd_carrier(hub: Bld, c: Carrier, dt: float) -> void:
+	match c.st:
+		"enter":
+			if _glide(c, seat_pos(hub, c.seat), dt):
+				c.st = "sit"
+				c.t = rng.randf_range(0.2, 1.0)
+		"sit":
+			c.t -= dt
+			if c.t > 0.0:
+				return
+			c.t = 0.5
+			var job = _find_work(hub, c, door_pos(hub))
+			if job != null:
+				c.src = job.src
+				c.load = job.items
+				c.st = "exit"
+		"exit":
+			if c.src != 0 and not blds.has(c.src):
+				_abort(hub, c)
+			elif _glide(c, door_pos(hub), dt):
+				_go_src(hub, c)
+		"go":
+			if not blds.has(c.src):
+				_abort(hub, c)
+			elif _follow(c, dt, 3.0 * K * WALK_MULT):
+				c.st = "pick"
+				c.t = 0.5
+		"pick":
+			c.t -= dt
+			if c.t <= 0.0:
+				c.src = 0
+				_next_leg(hub, c)
+		"carry":
+			if not blds.has(c.to):
+				_next_leg(hub, c)
+			elif _follow(c, dt, 2.2 * K * WALK_MULT):
+				c.st = "drop"
+				c.t = 0.4
+		"drop":
+			c.t -= dt
+			if c.t > 0.0:
+				return
+			var db = blds.get(c.to)
+			var rest: Array = []
+			for it in c.load:
+				if it.dst == c.to and db != null:
+					_deliver(it, db)
+				elif it.dst == c.to:
+					_dump(it, Vector2(c.x, c.y))
+				else:
+					rest.append(it)
+			c.load = rest
+			_next_leg(hub, c)
+		"ret":
+			if _follow(c, dt, 3.0 * K * WALK_MULT):
+				c.st = "enter"
+
+func _upd_hub(b: Bld, dt: float) -> void:
+	# Soll-Besetzung herstellen, dann arbeiten die Traeger
+	if b.carriers.size() < b.cn and free_now > 0:
+		var cr := Carrier.new()
+		cr.hub = b.id
+		var taken := {}
+		for o in b.carriers:
+			taken[o.seat] = true
+		for s in SEATS:
+			if not taken.has(s):
+				cr.seat = s
+				break
+		var dp := door_pos(b)
+		cr.x = dp.x
+		cr.y = dp.y
+		b.carriers.append(cr)
+		free_now -= 1
+	elif b.carriers.size() > b.cn:
+		for o in b.carriers:
+			if o.st == "sit":
+				b.carriers.erase(o)
+				break
+	for idx in b.carriers.size():
+		var c: Carrier = b.carriers[idx]
+		if c.st == "sit":
+			c.barrow = idx < b.barrows
+		_upd_carrier(b, c, dt)
 
 func miss(b, g: String) -> int:
 	if b.paused:
 		return 0
 	return b.cap.get(g, 0) - b.inbox.get(g, 0) - b.incoming.get(g, 0)
 
-func deliver(g: Good, b) -> void:
-	if b.done and Data.BD[b.type].kind == "store":
-		b.stock[g.t] = b.stock.get(g.t, 0) + 1
-	else:
-		b.inbox[g.t] = b.inbox.get(g.t, 0) + 1
-		b.incoming[g.t] = maxi(0, b.incoming.get(g.t, 0) - 1)
-	g.dest = -1
-
-func assign_dest(g: Good, f: Flag) -> void:
-	var best = null
-	var bv := 1e9
-	for b in blds.values():
-		if Data.BD[b.type].kind == "store" and b.done:
-			continue
-		if miss(b, g.t) > 0:
-			var d := _dd(b, f.id)
-			if d < 1e8:
-				var v: float = d - (25.0 if not b.done else 0.0)
-				if v < bv:
-					bv = v
-					best = b
-	if best != null:
-		g.dest = best.id
-		best.incoming[g.t] = best.incoming.get(g.t, 0) + 1
-		return
-	for b in blds.values():
-		if Data.BD[b.type].kind == "store" and b.done:
-			var d := _dd(b, f.id)
-			if d < 1e8 and (d < bv or best == null):
-				bv = d
-				best = b
-	if best != null:
-		g.dest = best.id
-
-func spawn_good(t: String, f: Flag, dest: int = 0) -> Good:
-	var g := Good.new()
-	g.t = t
-	g.fid = f.id
-	g.dest = dest
-	f.goods.append(g)
-	return g
-
-func emit(b, tp: String, n: int) -> void:
-	var f: Flag = flags[b.fid]
-	for i in n:
-		var g := spawn_good(tp, f)
-		assign_dest(g, f)
-		_arrive_check(g, f)
-
-func _arrive_check(g: Good, f: Flag) -> void:
-	var b = blds.get(g.dest)
-	if b != null and f.id in b.fids:
-		f.goods.erase(g)
-		deliver(g, b)
-
-func dispatch() -> void:
-	for f in flags.values():
-		for g in f.goods.duplicate():
-			if g.dest == 0:
-				assign_dest(g, f)
-				_arrive_check(g, f)
-			elif g.dest > 0 and not blds.has(g.dest):
-				g.dest = 0
-	var reqs: Array = []
-	for b in blds.values():
-		if b.done and Data.BD[b.type].kind == "store":
-			continue
-		for g in b.cap:
-			if miss(b, g) > 0:
-				reqs.append([0 if not b.done else 1, b, g])
-	# Baustellen zuerst, dort nach Prioritaet (hoch zuerst), dann aelteste zuerst
-	reqs.sort_custom(func(p, q):
-		if p[0] != q[0]:
-			return p[0] < q[0]
-		if p[1].prio != q[1].prio:
-			return p[1].prio > q[1].prio
-		return p[1].id < q[1].id)
-	for r in reqs:
-		var b = r[1]
-		var g: String = r[2]
-		# aeltester Bedarf wird komplett bedient, bevor der naechste drankommt
-		var guard := 0
-		while miss(b, g) > 0 and guard < 6:
-			guard += 1
-			var best = null
-			var bv := 1e9
-			var bflag := -1
-			for s in blds.values():
-				if s.done and Data.BD[s.type].kind == "store" and s.stock.get(g, 0) > 0:
-					var res := _dd2(b, s)
-					if res[0] < 1e8 and res[0] < bv and flags[res[1]].goods.size() < FLAG_CAP - 2:
-						bv = res[0]
-						best = s
-						bflag = res[1]
-			if best == null:
-				break
-			best.stock[g] -= 1
-			b.incoming[g] = b.incoming.get(g, 0) + 1
-			best.out_q.append({"t": g, "dest": b.id, "fid": bflag})
-
-# ---------------------------------------------------------------- Träger
-func seg_pos(s: Seg) -> Vector2:
-	if s.st == "arrive":
-		var n := s.arr.size()
-		var k := clampi(int(floor(s.arr_d)), 0, n - 1)
-		var k2 := mini(k + 1, n - 1)
-		var fr := s.arr_d - k
-		return Vector2(lerpf(s.arr[k][0], s.arr[k2][0], fr) + 0.5, lerpf(s.arr[k][1], s.arr[k2][1], fr) + 0.5)
-	var k := clampi(int(floor(s.p)), 0, s.L)
-	var k2 := mini(k + 1, s.L)
-	var fr := s.p - k
-	var c1 = s.cells[k]
-	var c2 = s.cells[k2]
-	return Vector2(lerpf(c1[0], c2[0], fr) + 0.5, lerpf(c1[1], c2[1], fr) + 0.5)
-
-func _sc(s: Seg, tp: float) -> float:
-	# Diagonale Wegstuecke sind laenger: Traeger laufen dort entsprechend langsamer pro Zelle
-	var k := clampi(int(floor(s.p)), 0, s.L - 1)
-	if tp < s.p and absf(s.p - floorf(s.p)) < 0.0001:
-		k = clampi(k - 1, 0, s.L - 1)
-	var a: Array = s.cells[k]
-	var b: Array = s.cells[k + 1]
-	return 1.0 if (a[0] == b[0] or a[1] == b[1]) else 0.7071
-
-func cap_of(s: Seg) -> int:
-	return BARROW_N if s.barrow else CARRY_N
-
-func _waiting(s: Seg, f: Flag) -> int:
-	var n := 0
-	for g in f.goods:
-		if wants(g, f, s):
-			n += 1
-	return n
-
-func find_job(s: Seg) -> int:
-	var fa: Flag = flags[s.a]
-	var fb: Flag = flags[s.b]
-	var na := _waiting(s, fa)
-	var nb := _waiting(s, fb)
-	if na + nb == 0:
-		return -1
-	if not s.barrow and barrows_free > 0 and (fa.goods.size() > BARROW_AT or fb.goods.size() > BARROW_AT) and maxi(na, nb) >= 2:
-		barrows_free -= 1
-		s.barrow = true
-	return 0 if na >= nb else 1
-
-func _pick(s: Seg, f: Flag) -> void:
-	var i := 0
-	while i < f.goods.size() and s.load.size() < cap_of(s):
-		var g: Good = f.goods[i]
-		if wants(g, f, s):
-			s.load.append(g)
-			f.goods.remove_at(i)
-		else:
-			i += 1
-
-func _unload(s: Seg, f: Flag) -> void:
-	var rest: Array = []
-	for g in s.load:
-		var b = blds.get(g.dest)
-		if b != null and f.id in b.fids:
-			deliver(g, b)
-		else:
-			rest.append(g)
-	var back: Array = []
-	if rest.size() > 0:
-		var room := FLAG_CAP - f.goods.size()
-		var need := rest.size() - room
-		if need > 0:
-			# Flagge voll: ablegen nur, wenn gleich Gegenware mitgenommen wird
-			var cand: Array = []
-			for i in f.goods.size():
-				var og: Good = f.goods[i]
-				if og.dest > 0 and next_seg(og, f) == s:
-					cand.append(i)
-			if cand.size() < need:
-				s.load = rest
-				return
-			for k in need:
-				var og2: Good = f.goods[cand[k]]
-				var g2: Good = rest[k]
-				g2.fid = f.id
-				f.goods[cand[k]] = g2
-				back.append(og2)
-			rest = rest.slice(need)
-		for g in rest:
-			g.fid = f.id
-			f.goods.append(g)
-	s.load = back
-	_pick(s, f)
-	if s.load.size() > 0:
-		s.st = "carry"
-		s.end = 1 - s.end
-	else:
-		s.st = "mid"
-
-func arrival_path(s: Seg) -> Array:
-	# Weg vom naechsten Lager (Tuerflagge) bis zur Mitte des Segments
-	var starts: Array = []
-	for b in blds.values():
-		if b.done and Data.BD[b.type].kind == "store":
-			for k in b.fids:
-				starts.append(k)
-	if starts.is_empty():
-		return []
-	var mid: int = s.L / 2
-	var best: Array = []
-	for side in 2:
-		var from_fid: int = s.a if side == 0 else s.b
-		var seg_cells: Array
-		if side == 0:
-			seg_cells = s.cells.slice(0, mid + 1)
-			seg_cells.pop_front()
-		else:
-			seg_cells = s.cells.slice(mid, s.L + 1)
-			seg_cells.reverse()
-			seg_cells.pop_front()
-		var d := {from_fid: 0.0}
-		var prev := {}
-		var open: Array = [from_fid]
-		var done := {}
-		var hit := -1
-		while open.size() > 0:
-			var bi := 0
-			for i in range(1, open.size()):
-				if d[open[i]] < d[open[bi]]:
-					bi = i
-			var u: int = open[bi]
-			open.remove_at(bi)
-			if done.has(u):
-				continue
-			done[u] = true
-			if u in starts:
-				hit = u
-				break
-			for sg in flags[u].segs:
-				if sg == s:
-					continue
-				var o: int = sg.b if sg.a == u else sg.a
-				var nd: float = d[u] + sg.L
-				if not d.has(o) or nd < d[o]:
-					d[o] = nd
-					prev[o] = [u, sg]
-					open.append(o)
-		if hit < 0:
-			continue
-		var cells: Array = [[flags[hit].x, flags[hit].y]]
-		var cur := hit
-		while cur != from_fid:
-			var pr: Array = prev[cur]
-			var sg: Seg = pr[1]
-			var cc: Array = sg.cells.duplicate()
-			# Zellen von cur nach pr[0] laufen
-			if sg.a != cur:
-				cc.reverse()
-			cc.pop_front()
-			cells.append_array(cc)
-			cur = pr[0]
-		cells.append_array(seg_cells)
-		if best.is_empty() or cells.size() < best.size():
-			best = cells
-	return best
-
-func upd_seg(s: Seg, dt: float) -> void:
-	if s.st == "wait_car":
-		s.chk -= dt
-		if s.chk <= 0.0:
-			s.chk = 0.6
-			if free_now <= 0:
-				return   # kein freier Pixler fuer diesen Traeger
-			var p := arrival_path(s)
-			if p.size() > 0:
-				s.arr = p
-				s.arr_d = 0.0
-				s.st = "arrive"
-				free_now -= 1
-		return
-	if s.st == "arrive":
-		s.arr_d += 3.2 * K * WALK_MULT * dt
-		if s.arr_d >= s.arr.size() - 1:
-			s.p = float(s.L / 2)
-			s.st = "idle"
-			s.arr = []
-		return
-	var spd := (2.2 if s.load.size() > 0 else 3.0) * K * WALK_MULT * dt
-	match s.st:
-		"idle", "mid":
-			if s.st == "mid":
-				s.p = move_toward(s.p, s.L * 0.5, spd * _sc(s, s.L * 0.5))
-			s.chk -= dt
-			if s.chk <= 0.0:
-				s.chk = 0.15
-				var e := find_job(s)
-				if e >= 0:
-					s.end = e
-					s.st = "pick"
-					s.idle_t = 0.0
-					return
-				s.idle_t += 0.15
-				if s.barrow and s.idle_t > 8.0:
-					s.barrow = false
-					barrows_free += 1
-			if s.st == "mid" and absf(s.p - s.L * 0.5) < 0.01:
-				s.st = "idle"
-		"pick":
-			var tp := 0.0 if s.end == 0 else float(s.L)
-			s.p = move_toward(s.p, tp, spd * _sc(s, tp))
-			if absf(s.p - tp) < 0.001:
-				var f: Flag = flags[s.a] if s.end == 0 else flags[s.b]
-				_pick(s, f)
-				if s.load.size() > 0:
-					s.st = "carry"
-					s.end = 1 - s.end
-				else:
-					s.st = "mid"
-		"carry":
-			var tp := 0.0 if s.end == 0 else float(s.L)
-			s.p = move_toward(s.p, tp, spd * _sc(s, tp))
-			if absf(s.p - tp) < 0.001:
-				var f: Flag = flags[s.a] if s.end == 0 else flags[s.b]
-				_unload(s, f)
-
 # ---------------------------------------------------------------- Gebäude
 func _door_ok(dx: int, dy: int, force: bool) -> bool:
 	if not inb(dx, dy):
 		return false
 	var di := dy * MW + dx
-	if Data.WALK[ground[di]] == 0 or occ[di] != 0:
+	if Data.WALK[ground[di]] == 0 or occ[di] != 0 or doorc[di] != 0:
 		return false
 	if not force and not no_obj(di):
-		return false
-	if flag[di] != 0 and flags[flag[di]].bld != 0:
 		return false
 	return true
 
 func door_offsets(type: String, x: int, y: int, force: bool = false) -> Array:
-	# Tuer-Flaggen als Offsets zur linken oberen Gebaeudeecke. Bei Gebaeuden mit einer Tuer wird die
-	# beste freie Zelle unter der Vorderseite gewaehlt (Mitte zuerst), vorhandene Wege duerfen angedockt werden.
+	# Tuer-Zelle als Offset zur linken oberen Gebaeudeecke: die beste freie Zelle unter der Vorderseite (Mitte zuerst).
 	var d: Dictionary = Data.BD[type]
-	if d.has("doors"):
-		var res: Array = []
-		for dd in d.doors:
-			if not _door_ok(x + dd[0], y + dd[1], force):
-				return []
-			res.append(dd)
-		return res
 	var mid: int = d.w / 2
 	var order: Array = [mid, mid - 1, mid + 1, mid - 2, mid + 2]
 	for k in range(d.w):
@@ -1286,13 +1226,13 @@ func can_place(type: String, x: int, y: int) -> String:
 			var i := yy * MW + xx
 			if Data.WALK[ground[i]] == 0:
 				return "Hier ist kein fester Boden"
-			if not no_obj(i) or occ[i] != 0:
+			if not no_obj(i) or occ[i] != 0 or doorc[i] != 0:
 				return "Der Platz ist belegt"
-			if road[i] != 0 or flag[i] != 0:
-				return "Straße im Weg"
+			if road[i] != 0:
+				return "Weg im Weg"
 	if door_offsets(type, x, y).is_empty():
-		return "Vor der Tür ist kein Platz für die Flagge"
-	if (d.kind == "gather" or d.kind == "process" or type == "lager") and used_workers() + carrier_count() >= pop:
+		return "Vor der Tür ist kein Platz"
+	if (d.kind == "gather" or d.kind == "process" or d.kind == "service") and used_workers() + carrier_count() >= pop:
 		return "Keine freien Pixler! Baue Wohnhäuser und die Taverne, dann ziehen neue ein."
 	if d.has("need") and not has_resource(type, x, y):
 		match d.need:
@@ -1330,13 +1270,15 @@ func place_building(type: String, x: int, y: int, instant: bool = false) -> Bld:
 	var doors := door_offsets(type, x, y, instant)
 	if doors.is_empty():
 		doors = [[d.w / 2, d.h]]
-	for dd in doors:
-		if obj[(y + dd[1]) * MW + x + dd[0]] != 0:
-			set_obj((y + dd[1]) * MW + x + dd[0], 0)
-		var f := create_flag(x + dd[0], y + dd[1])
-		f.bld = b.id
-		b.fids.append(f.id)
-	b.fid = b.fids[b.fids.size() / 2]
+	var dd: Array = doors[0]
+	b.door = Vector2i(x + dd[0], y + dd[1])
+	var di := b.door.y * MW + b.door.x
+	if obj[di] != 0:
+		set_obj(di, 0)
+	doorc[di] = b.id
+	if d.has("hub"):
+		b.cn = d.get("cn", 0)
+		b.design = rng.randi() % 3
 	blds[b.id] = b
 	var tot := 0
 	for k in d.cost:
@@ -1372,13 +1314,6 @@ func _finish(b: Bld) -> void:
 		b.feed_t = 20.0
 	b.st = "idle"
 	b.timer = 0.5
-	if d.has("keepers") and b.keepers.is_empty():
-		for k in d.keepers:
-			var kp := Keeper.new()
-			kp.home = Vector2(b.x + b.w * 0.5, b.y + b.h * 0.5)
-			kp.x = kp.home.x
-			kp.y = kp.home.y
-			b.keepers.append(kp)
 	if d.kind == "lm":
 		landmarks[b.type] = true
 		events.append(["lm", d.n, b.x + b.w * 0.5, b.y + b.h * 0.5])
@@ -1394,7 +1329,7 @@ func _finish(b: Bld) -> void:
 			animals.append(a)
 	if upgraded:
 		events.append(["up", "%s: jetzt %s (%d Plätze)" % [d.n, Data.HOUSE_NAME[b.level], Data.HOUSE_CAP[b.level]], b.x + b.w * 0.5, b.y + b.h * 0.5])
-	else:
+	elif d.kind != "pile":
 		events.append(["done", d.n, b.x + b.w * 0.5, b.y + b.h * 0.5])
 
 func upgrade_error(b: Bld) -> String:
@@ -1435,8 +1370,8 @@ func _nearest_store(x: float, y: float, skip = null):
 	return best
 
 func can_demolish(b: Bld) -> bool:
-	# Langhaus und Lagerhaeuser sind der Kern der Logistik und lassen sich nicht abreissen
-	return b.type != "hq" and b.type != "lager"
+	# Nur das Langhaus (und Abrisshaufen) lassen sich nicht abreissen; Baustellen aller Art gehen immer
+	return b.type != "hq" and b.type != "haufen"
 
 func progress(b: Bld) -> float:
 	# Fortschritt der laufenden Taetigkeit 0..1, -1 wenn nichts laeuft
@@ -1445,7 +1380,7 @@ func progress(b: Bld) -> float:
 		return b.prog if b.bw or b.prog > 0.0 else -1.0
 	if d.kind == "house":
 		return 1.0 - clampf(b.feed_t / 30.0, 0.0, 1.0)
-	if d.kind == "store" or d.kind == "lm" or b.paused:
+	if d.kind == "store" or d.kind == "lm" or d.kind == "hub" or d.kind == "service" or b.paused:
 		return -1.0
 	match b.st:
 		"work":
@@ -1456,46 +1391,53 @@ func progress(b: Bld) -> float:
 		"act":
 			return 0.4 + 0.3 * (1.0 - clampf(b.timer / maxf(b.ptot, 0.01), 0.0, 1.0))
 		"back":
-			var f: Flag = flags[b.fid]
-			var dst2 := Vector2(f.x + 0.5 - b.wx, f.y + 0.5 - b.wy).length()
+			var dst2 := Vector2(b.door.x + 0.5 - b.wx, b.door.y + 0.5 - b.wy).length()
 			return 0.7 + 0.2 * (1.0 - clampf(dst2 / b.d0, 0.0, 1.0))
 		"rest":
 			return 0.9 + 0.1 * (1.0 - clampf(b.timer / maxf(b.ptot, 0.01), 0.0, 1.0))
-		"out", "ret":
-			return 1.0
 	return -1.0
 
 func demolish(b: Bld) -> void:
 	if not can_demolish(b):
 		return
 	var d: Dictionary = Data.BD[b.type]
-	# Waren zurueck ins naechste Lager: Inhalt, Lagerbestand, halbe Baukosten fertiger Gebaeude
+	# Waren zurueck ins naechste Lager: Inhalt, Lager- und Ausgangsbestand, halbe Baukosten fertiger Gebaeude
+	# Alles bleibt als Haufen an der Abrissstelle liegen; Träger sammeln ihn ein.
+	# Die Baukosten fertiger Gebäude gibt es voll zurück, aber roh (Bretter -> Holz, Steinblöcke -> Stein).
 	var refund := {}
 	for k in b.inbox:
 		refund[k] = refund.get(k, 0) + b.inbox[k]
-	if b.done:
+	if b.done or b.upg:
 		for k in d.cost:
-			refund[k] = refund.get(k, 0) + (d.cost[k] + 1) / 2
+			var rk: String = Data.RAW.get(k, k)
+			refund[rk] = refund.get(rk, 0) + d.cost[k]
 		if b.type == "haus":
 			for lv in range(1, b.level):
 				for k in Data.HOUSE_UP[lv].cost:
-					refund[k] = refund.get(k, 0) + (Data.HOUSE_UP[lv].cost[k] + 1) / 2
+					var rk2: String = Data.RAW.get(k, k)
+					refund[rk2] = refund.get(rk2, 0) + Data.HOUSE_UP[lv].cost[k]
 	for k in b.stock:
 		refund[k] = refund.get(k, 0) + b.stock[k]
-	var rs = _nearest_store(b.x + b.w * 0.5, b.y + b.h * 0.5, b)
+	for k in b.outbox:
+		refund[k] = refund.get(k, 0) + b.outbox[k]
+	# Traeger des Hauses gehen nach Hause, ihre Last kommt ins Lager, die Karren zurueck in den Vorrat
+	for c in b.carriers:
+		for it in c.load:
+			_dump(it, Vector2(c.x, c.y))
+	b.carriers = []
+	barrows_free += b.barrows
+	b.barrows = 0
 	var n_back := 0
-	if rs != null:
-		for k in refund:
-			if refund[k] > 0:
-				rs.stock[k] = rs.stock.get(k, 0) + refund[k]
-				n_back += refund[k]
-	if n_back > 0:
-		events.append(["refund", "%d Waren zurück ins Lager" % n_back, b.x + b.w * 0.5, b.y + b.h * 0.5])
+	for k in refund:
+		n_back += refund[k]
 	if d.kind == "lm":
 		landmarks.erase(b.type)
 	for yy in range(b.y, b.y + b.h):
 		for xx in range(b.x, b.x + b.w):
 			occ[yy * MW + xx] = 0
+	var di := b.door.y * MW + b.door.x
+	if doorc[di] == b.id:
+		doorc[di] = 0
 	for i in b.fields:
 		if field[i] == b.id:
 			field[i] = 0
@@ -1505,22 +1447,32 @@ func demolish(b: Bld) -> void:
 		if b.tg.has("animal"):
 			b.tg.animal.frozen = false
 	blds.erase(b.id)
-	for fk in b.fids:
-		var f: Flag = flags[fk]
-		f.bld = 0
-		if f.segs.is_empty():
-			remove_flag(f)
 	for a in animals.duplicate():
 		if a.home == b:
 			animals.erase(a)
-	for fl in flags.values():
-		for g in fl.goods:
-			if g.dest == b.id:
-				g.dest = 0
-	for s in segs.values():
-		for lg in s.load:
-			if lg.dest == b.id:
-				lg.dest = 0
+	if n_back > 0:
+		var pile := place_building("haufen", b.x, b.y, true)
+		for k in refund:
+			if refund[k] > 0:
+				pile.outbox[k] = refund[k]
+		events.append(["refund", "%d Waren liegen an der Abrissstelle" % n_back, b.x + b.w * 0.5, b.y + b.h * 0.5])
+	net_ver += 1
+
+func _upd_pile(b: Bld) -> void:
+	# Abrisshaufen verschwindet, sobald alles abgeholt ist (und kein Traeger mehr auf dem Weg dorthin ist)
+	if outbox_total(b) > 0:
+		return
+	for o in blds.values():
+		for c in o.carriers:
+			if c.src == b.id:
+				return
+	for yy in range(b.y, b.y + b.h):
+		for xx in range(b.x, b.x + b.w):
+			occ[yy * MW + xx] = 0
+	var di := b.door.y * MW + b.door.x
+	if doorc[di] == b.id:
+		doorc[di] = 0
+	blds.erase(b.id)
 	net_ver += 1
 
 func has_inputs(b: Bld) -> bool:
@@ -1651,9 +1603,9 @@ func upd_bld(b: Bld, dt: float) -> void:
 		if b.paused:
 			b.msg = "Pausiert"
 		elif not ok:
-			b.msg = "Wartet auf Material"
+			b.msg = "Wartet auf Material" if hub_covers(b) else "Wartet auf Material: Kein Trägerlager in Reichweite"
 		elif not b.bw:
-			b.msg = "Kein Weg für Bauarbeiter: Straße zum Lager bauen" if b.retry > 0.0 else "Wartet auf Bauarbeiter"
+			b.msg = "Bauarbeiter finden keinen Weg" if b.retry > 0.0 else "Wartet auf Bauarbeiter"
 		else:
 			b.msg = "Wird gebaut"
 			b.prog += dt / b.build_t
@@ -1661,7 +1613,19 @@ func upd_bld(b: Bld, dt: float) -> void:
 			if b.prog >= 1.0:
 				_finish(b)
 		return
-	if d.kind == "store" or d.kind == "lm":
+	if d.has("hub"):
+		_upd_hub(b, dt)
+	if d.kind == "pile":
+		_upd_pile(b)
+		return
+	if d.kind == "store" or d.kind == "lm" or d.kind == "hub":
+		return
+	if d.kind == "service":
+		if b.paused:
+			b.msg = "Pausiert"
+			b.busy = false
+			return
+		_upd_digger(b, dt)
 		return
 	if d.kind == "house":
 		_upd_house(b, dt)
@@ -1670,7 +1634,7 @@ func upd_bld(b: Bld, dt: float) -> void:
 		b.msg = "Pausiert"
 		b.busy = false
 		return
-	var f: Flag = flags[b.fid]
+	var dp := door_pos(b)
 	match b.st:
 		"idle":
 			b.busy = false
@@ -1678,8 +1642,8 @@ func upd_bld(b: Bld, dt: float) -> void:
 			if b.timer > 0.0:
 				return
 			b.timer = 0.4
-			if f.goods.size() >= FLAG_CAP - 1:
-				b.msg = "Flagge voll: Straße frei machen"
+			if outbox_total(b) >= OUT_CAP:
+				b.msg = "Ausgang voll: Träger kommen nicht nach" if hub_covers(b) else "Kein Trägerlager in Reichweite"
 				return
 			if b.type == "ballon":
 				for bl in balloons:
@@ -1696,7 +1660,7 @@ func upd_bld(b: Bld, dt: float) -> void:
 				b.msg = "Genug auf Lager"
 				return
 			if not has_inputs(b):
-				b.msg = "Wartet auf Waren"
+				b.msg = "Wartet auf Waren" if hub_covers(b) else "Wartet auf Waren: Kein Trägerlager in Reichweite"
 				return
 			if d.kind == "gather":
 				var tg = pick_target(b)
@@ -1706,8 +1670,8 @@ func upd_bld(b: Bld, dt: float) -> void:
 				take_inputs(b)
 				b.tg = tg
 				b.st = "walk"
-				b.wx = f.x + 0.5
-				b.wy = f.y + 0.5
+				b.wx = dp.x
+				b.wy = dp.y
 				b.carry = ""
 				b.msg = "Unterwegs"
 				var ttx: float = tg.x + 0.5
@@ -1744,50 +1708,10 @@ func upd_bld(b: Bld, dt: float) -> void:
 					meals += 1
 					events.append(["meal", "Ein neuer Pixler zieht ein!", b.x + b.w * 0.5, b.y])
 				if d.out != "":
-					# Ware wird vom Pixler selbst vor die Tuer gelegt
-					var sp := _keeper_start(b, f)
-					b.wx = sp.x
-					b.wy = sp.y
-					b.carry = d.out
-					b.st = "out"
-					b.msg = "Liefert aus"
-				else:
-					b.st = "idle"
-					b.timer = 0.3
-		"out":
-			b.busy = false
-			var ftx := f.x + 0.5
-			var fty := f.y + 0.5
-			var odv := Vector2(ftx - b.wx, fty - b.wy)
-			var ostep := 2.3 * K * WALK_MULT * dt
-			if odv.length() <= ostep:
-				if f.goods.size() >= FLAG_CAP:
-					b.msg = "Flagge voll: Straße frei machen"
-					return
-				b.wx = ftx
-				b.wy = fty
-				emit(b, d.out, d.outn)
-				b.carry = ""
-				b.st = "ret"
-			else:
-				odv = odv.normalized() * ostep
-				b.wx += odv.x
-				b.wy += odv.y
-				if absf(odv.x) > 0.01:
-					b.face = 1 if odv.x > 0 else -1
-		"ret":
-			var rp := _keeper_start(b, f)
-			var rdv := rp - Vector2(b.wx, b.wy)
-			var rstep := 2.3 * K * WALK_MULT * dt
-			if rdv.length() <= rstep:
+					# fertige Ware wartet im Ausgang auf einen Traeger
+					b.outbox[d.out] = b.outbox.get(d.out, 0) + d.outn
 				b.st = "idle"
 				b.timer = 0.3
-			else:
-				rdv = rdv.normalized() * rstep
-				b.wx += rdv.x
-				b.wy += rdv.y
-				if absf(rdv.x) > 0.01:
-					b.face = 1 if rdv.x > 0 else -1
 		"walk":
 			b.busy = true
 			var tx: float = b.tg.x + 0.5
@@ -1817,17 +1741,15 @@ func upd_bld(b: Bld, dt: float) -> void:
 				b.tg = null
 				b.carry = d.out
 				b.st = "back"
-				b.d0 = maxf(0.5, Vector2(f.x + 0.5 - b.wx, f.y + 0.5 - b.wy).length())
+				b.d0 = maxf(0.5, Vector2(dp.x - b.wx, dp.y - b.wy).length())
 		"back":
-			var tx := f.x + 0.5
-			var ty := f.y + 0.5
-			var dv := Vector2(tx - b.wx, ty - b.wy)
+			var dv := Vector2(dp.x - b.wx, dp.y - b.wy)
 			var step := 2.3 * K * WALK_MULT * dt
 			if dv.length() <= step:
-				b.wx = tx
-				b.wy = ty
+				b.wx = dp.x
+				b.wy = dp.y
 				if d.out != "":
-					emit(b, d.out, 1)
+					b.outbox[d.out] = b.outbox.get(d.out, 0) + 1
 				b.carry = ""
 				b.st = "rest"
 				b.timer = d.t * 0.5
@@ -1879,7 +1801,8 @@ func upd_eco() -> void:
 	if rab < 32 and rng.randf() < 0.2:
 		spawn_animal("rabbit")
 	# Idle-Pixler um das HQ
-	var want_idle := clampi(free_pixlers(), 0, 12)
+	# Freie Pixler laufen nicht durchs Dorf (zu unübersichtlich); IDLERS_MAX > 0 schaltet sie wieder ein
+	var want_idle := mini(clampi(free_pixlers(), 0, 12), IDLERS_MAX)
 	while idlers.size() < want_idle:
 		var a := Animal.new()
 		a.kind = "idler"
@@ -1951,20 +1874,17 @@ func _has_builder(id: int) -> bool:
 	return false
 
 func _send_builder(b: Bld) -> bool:
-	var fl: Flag = flags[b.fid]
-	var best_f = null
+	var best_s = null
 	var bv := 1e9
 	for s in blds.values():
 		if s.done and Data.BD[s.type].kind == "store":
-			for fk in s.fids:
-				var sf: Flag = flags[fk]
-				var v := Vector2(sf.x - fl.x, sf.y - fl.y).length()
-				if v < bv:
-					bv = v
-					best_f = sf
-	if best_f == null:
+			var v := Vector2(s.door - b.door).length()
+			if v < bv:
+				bv = v
+				best_s = s
+	if best_s == null:
 		return false
-	var path: Array = [[fl.x, fl.y]] if (best_f.x == fl.x and best_f.y == fl.y) else find_path(best_f.x, best_f.y, fl.x, fl.y, true)
+	var path: Array = route(best_s.door.x, best_s.door.y, b.door.x, b.door.y)
 	if path.is_empty():
 		return false
 	var bd := Builder.new()
@@ -1976,26 +1896,6 @@ func _send_builder(b: Bld) -> bool:
 		bd.st = "work"
 	builders.append(bd)
 	return true
-
-func _walk_path(bd: Builder, dt: float, fwd: bool) -> bool:
-	# true, wenn am Ende des Weges angekommen
-	var n := bd.path.size()
-	var k := clampi(int(floor(bd.k)), 0, n - 1)
-	var k2 := mini(k + 1, n - 1)
-	var stepl := 1.0
-	if k2 != k and bd.path[k][0] != bd.path[k2][0] and bd.path[k][1] != bd.path[k2][1]:
-		stepl = 1.4142
-	bd.k = minf(bd.k + 2.8 * K * WALK_MULT * dt / stepl, float(n - 1))
-	k = clampi(int(floor(bd.k)), 0, n - 1)
-	k2 = mini(k + 1, n - 1)
-	var fr := bd.k - k
-	var nx: float = lerpf(bd.path[k][0], bd.path[k2][0], fr) + 0.5
-	var ny: float = lerpf(bd.path[k][1], bd.path[k2][1], fr) + 0.5
-	if absf(nx - bd.x) > 0.001:
-		bd.face = 1 if nx > bd.x else -1
-	bd.x = nx
-	bd.y = ny
-	return bd.k >= n - 1
 
 func update_builders(dt: float) -> void:
 	for b in blds.values():
@@ -2011,12 +1911,12 @@ func update_builders(dt: float) -> void:
 			bd.st = "back"
 		match bd.st:
 			"go":
-				if _walk_path(bd, dt, true):
+				if _follow(bd, dt, 2.8 * K * WALK_MULT):
 					bd.st = "work"
 			"work":
 				b.bw = true
 			"back":
-				if bd.path.size() < 2 or _walk_path(bd, dt, false):
+				if bd.path.size() < 2 or _follow(bd, dt, 2.8 * K * WALK_MULT):
 					builders.erase(bd)
 	var active := builders_active()
 	if active >= builder_cap() or free_pixlers() <= 0:
@@ -2035,90 +1935,7 @@ func update_builders(dt: float) -> void:
 			break
 		if not _send_builder(b):
 			b.retry = 4.0
-			b.msg = "Bauarbeiter finden keinen Weg: Straße zum Lager bauen"
-
-func _keeper_move(k: Keeper, tgt: Vector2, dt: float) -> bool:
-	var dv := tgt - Vector2(k.x, k.y)
-	var step := 2.3 * K * WALK_MULT * dt
-	if dv.length() <= step:
-		k.x = tgt.x
-		k.y = tgt.y
-		return true
-	dv = dv.normalized() * step
-	k.x += dv.x
-	k.y += dv.y
-	if absf(dv.x) > 0.01:
-		k.face = 1 if dv.x > 0 else -1
-	return false
-
-func _keeper_start(b: Bld, fl: Flag, idx: int = 0) -> Vector2:
-	# Punkt zwei Zellen hinter der Tuer, im Gebaeude. Mehrere Lagerarbeiter stehen nebeneinander.
-	var fp := Vector2(fl.x + 0.5, fl.y + 0.5)
-	var c := Vector2(b.x + b.w * 0.5, b.y + b.h * 0.5)
-	var dir := (c - fp).normalized()
-	var spread := 0.0
-	if b.keepers.size() > 1 and idx >= 0:
-		spread = (idx - (b.keepers.size() - 1) / 2.0) * 0.9
-	return fp + dir * 2.0 + Vector2(-dir.y, dir.x) * spread
-
-func upd_keepers(dt: float) -> void:
-	for b in blds.values():
-		if b.keepers.is_empty():
-			continue
-		for k in b.keepers:
-			match k.st:
-				"idle":
-					if b.out_q.is_empty():
-						continue
-					var job = b.out_q.pop_front()
-					if not flags.has(job.fid):
-						# Tuerflagge existiert nicht mehr: Ware zurueck ins Regal
-						b.stock[job.t] = b.stock.get(job.t, 0) + 1
-						var db = blds.get(job.dest)
-						if db != null:
-							db.incoming[job.t] = maxi(0, db.incoming.get(job.t, 0) - 1)
-						continue
-					k.job = job
-					k.st = "load"
-					k.t = 1.0
-					k.x = k.home.x
-					k.y = k.home.y
-				"load":
-					k.t -= dt
-					if k.t <= 0.0:
-						var fl: Flag = flags[k.job.fid]
-						var s := _keeper_start(b, fl, b.keepers.find(k))
-						k.x = s.x
-						k.y = s.y
-						k.st = "go"
-				"go":
-					var fl2: Flag = flags.get(k.job.fid)
-					if fl2 == null:
-						k.st = "back"
-						continue
-					if _keeper_move(k, Vector2(fl2.x + 0.5, fl2.y + 0.5), dt):
-						k.st = "drop"
-						k.t = 0.4
-				"drop":
-					k.t -= dt
-					if k.t > 0.0:
-						continue
-					var fl3: Flag = flags.get(k.job.fid)
-					if fl3 == null:
-						b.stock[k.job.t] = b.stock.get(k.job.t, 0) + 1
-						k.job = null
-						k.st = "back"
-					elif fl3.goods.size() >= FLAG_CAP:
-						k.t = 0.5   # Flagge voll: warten
-					else:
-						var dest: int = k.job.dest if blds.has(k.job.dest) else 0
-						var gd := spawn_good(k.job.t, fl3, dest)
-						_arrive_check(gd, fl3)
-						k.job = null
-						k.st = "back"
-				"back":
-					if _keeper_move(k, k.home, dt):
-						k.st = "idle"
+			b.msg = "Bauarbeiter finden keinen Weg"
 
 func balloon_home(b) -> Vector2:
 	# Hinterhof: hinter (ueber) dem Gebaeude
@@ -2171,23 +1988,16 @@ func upd_balloons(dt: float) -> void:
 
 func update(dt: float) -> void:
 	t += dt
-	_acc_disp += dt
 	_acc_eco += dt
-	if _acc_disp >= 0.35:
-		_acc_disp = 0.0
-		dispatch()
 	if _acc_eco >= 1.0:
 		_acc_eco = 0.0
 		upd_eco()
 	update_builders(dt)
 	free_now = free_pixlers()
-	for s in segs.values():
-		upd_seg(s, dt)
 	for b in blds.values():
 		upd_bld(b, dt)
 	for a in animals:
 		_wander(a, dt)
 	upd_balloons(dt)
-	upd_keepers(dt)
 	for a in idlers:
 		_wander(a, dt)

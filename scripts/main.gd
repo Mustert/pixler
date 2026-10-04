@@ -68,6 +68,7 @@ var objective: Label
 var road_undo: Array = []
 var lab_barrow: Label
 var lab_builder: Label
+var info_hub: HBoxContainer
 var info_prio: Button
 var info_up: Button
 var last_st := {}
@@ -119,12 +120,6 @@ func _ready() -> void:
 			Sim.CARRY_N = int(a.substr(8))
 		elif a.begins_with("--barrow="):
 			Sim.BARROW_N = int(a.substr(9))
-		elif a.begins_with("--barrow-at="):
-			Sim.BARROW_AT = int(a.substr(12))
-		elif a.begins_with("--seg="):
-			Sim.ROAD_SEG = int(a.substr(6))
-		elif a.begins_with("--flagcap="):
-			Sim.FLAG_CAP = int(a.substr(10))
 		elif a.begins_with("--cam="):
 			var p := a.substr(6).split(",")
 			call_deferred("_set_cam", Vector2(float(p[0]), float(p[1])))
@@ -164,27 +159,13 @@ func _ready() -> void:
 		for bb in sim.blds.values():
 			if bb.type == "ballon":
 				print("BALLOONHAUS ", bb.x, ",", bb.y, " done=", bb.done, " st=", bb.st, " msg=", bb.msg, " timer=", bb.timer)
-		var full := 0
-		var tot := 0
-		for f in sim.flags.values():
-			tot += f.goods.size()
-			if f.goods.size() >= 8:
-				full += 1
-				var ds := ""
-				for g in f.goods:
-					var nb = sim.blds.get(g.dest)
-					ds += " %s->%s(%s)" % [g.t, nb.type if nb else str(g.dest), "ok" if sim.next_seg(g, f) != null else "NOROUTE"]
-				print("FULL flag ", f.x, ",", f.y, " bld=", f.bld, " segs=", f.segs.size(), ds)
 		var stc := {}
-		var barrow_segs := 0
-		for sg in sim.segs.values():
-			stc[sg.st] = stc.get(sg.st, 0) + 1
-			if sg.barrow:
-				barrow_segs += 1
-		print("SEG STATES=", stc, " barrows free=", sim.barrows_free, "/", sim.barrows_total, " on_segs=", barrow_segs)
-		print("FLAGS=", sim.flags.size(), " SEGS=", sim.segs.size(), " goods_on_flags=", tot, " full=", full)
 		for b in sim.blds.values():
-			print("  ", b.type, " done=", b.done, " st=", b.st, " msg=", b.msg, " inbox=", b.inbox)
+			for c in b.carriers:
+				stc[c.st] = stc.get(c.st, 0) + 1
+		print("CARRIERS=", sim.carrier_count(), " states=", stc, " barrows free=", sim.barrows_free, "/", sim.barrows_total, " roads=", sim.roads.size())
+		for b in sim.blds.values():
+			print("  ", b.type, " done=", b.done, " st=", b.st, " msg=", b.msg, " inbox=", b.inbox, " outbox=", b.outbox, " stock=", b.stock if b.type == "hq" else "")
 
 func _set_cam(p: Vector2) -> void:
 	cam.position = p
@@ -245,167 +226,195 @@ func _setup_world() -> void:
 					lava_chunks[ci] = []
 				lava_chunks[ci].append(y * MW + x)
 
+func _spot(type: String, cx: int, cy: int, r0: int = 3, r1: int = 70) -> Vector2i:
+	# freier, gueltiger Bauplatz (linke obere Ecke) in wachsenden Ringen um (cx, cy)
+	var d: Dictionary = Data.BD[type]
+	for r in range(r0, r1):
+		for a in 24:
+			var ang := a * TAU / 24.0 + r
+			var x: int = cx + int(cos(ang) * r) - d.w / 2
+			var y: int = cy + int(sin(ang) * r * 0.8) - d.h / 2
+			if sim.inb(x, y) and sim.can_place(type, x, y) == "":
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+func _run(secs: float) -> void:
+	for i in int(secs * 10.0):
+		sim.update(0.1)
+
 func _selftest() -> void:
 	var log := func(m): print("SELFTEST: ", m)
+	var hq: Sim.Bld = sim.blds.values()[0]
+	var hc := sim.bcenter(hq)
+	log.call("hq door=%s carriers want=%d" % [str(hq.door), hq.cn])
+	# Holzfaeller ueber die Bedienlogik setzen (Hover ist die Gebaeudemitte)
 	_set_mode("build", "holzfaeller")
-	# gueltigen Holzfaeller-Platz suchen (Hover ist die Gebaeudemitte)
 	var hd: Dictionary = Data.BD["holzfaeller"]
-	for r in range(6, 60):
-		for a in 24:
-			var cx := 182 + int(cos(a * TAU / 24.0) * r)
-			var cy := 196 + int(sin(a * TAU / 24.0) * r)
-			if hover.x < 0 and sim.inb(cx, cy) and sim.can_place("holzfaeller", cx - hd.w / 2, cy - hd.h / 2) == "":
-				hover = Vector2i(cx, cy)
+	var sp := _spot("holzfaeller", hc.x - 6, hc.y + 10, 6)
+	hover = Vector2i(sp.x + hd.w / 2, sp.y + hd.h / 2)
 	_update_hint()
 	log.call("ghost_err=[%s]" % ghost_err)
 	_click()
-	log.call("blds=%d" % sim.blds.size())
-	_set_mode("road", "")
-	hover = Vector2i(188, 180)
-	_click()
-	log.call("road_start=%s" % str(road_start))
-	var hff: Sim.Flag = sim.flags[sim.blds.values()[1].fid]
-	hover = Vector2i(hff.x, hff.y)
-	_update_hint()
-	log.call("prev=%d" % road_prev.size())
-	_click()
-	log.call("segs=%d flags=%d" % [sim.segs.size(), sim.flags.size()])
-	# Flagge auf Strasse
-	_set_mode("flag", "")
-	var seg: Sim.Seg = sim.segs.values()[0]
-	if seg.L >= 3:
-		hover = Vector2i(seg.cells[1][0], seg.cells[1][1])
-		_click()
-	log.call("flags after flag tool=%d" % sim.flags.size())
-	# Bauarbeiter: Holzfaeller muss gebaut werden, Prioritaet/Pause/Abriss-Rueckgabe pruefen
 	var hf: Sim.Bld = null
 	for bb in sim.blds.values():
 		if bb.type == "holzfaeller":
 			hf = bb
-	var seen_builder := false
+	log.call("blds=%d holzfaeller=%s" % [sim.blds.size(), str(hf != null)])
+	# Wege und Traegerstationen gibt es erst mit dem Wegebauer
+	_set_mode("road", "")
+	log.call("road tool without roadbuilder -> mode=%s" % mode)
+	_set_mode("select", "")
+	var wsp := _spot("wegebauer", hc.x - 8, hc.y + 8)
+	var wb := sim.place_building("wegebauer", wsp.x, wsp.y)
+	var tsp := _spot("traeger", hc.x + 8, hc.y + 10)
+	var tl := sim.place_building("traeger", tsp.x, tsp.y)
+	sim.set_carriers(tl, 4)
+	var ssp := _spot("saegewerk", hc.x - 4, hc.y + 12)
+	var sw := sim.place_building("saegewerk", ssp.x, ssp.y)
+	log.call("traeger design=%d spots wb=%s tl=%s saeg=%s" % [tl.design, str(wsp), str(tsp), str(ssp)])
 	var t_done := -1.0
-	for i in 1500:
+	var stock0 := sim.total_stock("bretter")
+	for i in 3000:
 		sim.update(0.1)
-		if sim.builders.size() > 0:
-			seen_builder = true
-		if hf.done and t_done < 0.0:
+		if hf.done and sw.done and wb.done and tl.done and t_done < 0.0:
 			t_done = sim.t
-	log.call("holzfaeller done=%s at t=%.0f builder_seen=%s cap=%d msg=%s pop=%d/%d" % [hf.done, t_done, seen_builder, sim.builder_cap(), hf.msg, sim.pop, sim.pop_cap()])
+	log.call("done: holzfaeller=%s saegewerk=%s wegebauer=%s traeger=%s at t=%.0f" % [hf.done, sw.done, wb.done, tl.done, t_done])
+	log.call("hq carriers=%d tl carriers=%d builders cap=%d pop=%d/%d free=%d" % [hq.carriers.size(), tl.carriers.size(), sim.builder_cap(), sim.pop, sim.pop_cap(), sim.free_pixlers()])
+	log.call("holz stock=%d bretter %d -> %d  holzfaeller msg=%s out=%s sawmill msg=%s in=%s out=%s" % [sim.total_stock("holz"), stock0, sim.total_stock("bretter"), hf.msg, str(hf.outbox), sw.msg, str(sw.inbox), str(sw.outbox)])
+	log.call("roads_unlocked=%s" % sim.roads_unlocked())
+	# Weg per Bedienlogik: vom Wegebauer zum Langhaus
+	_set_mode("road", "")
+	hover = Vector2i(wb.door.x, wb.door.y)
+	_click()
+	log.call("road_start=%s" % str(road_start))
+	hover = Vector2i(hq.door.x, hq.door.y)
+	_update_hint()
+	log.call("prev=%d" % road_prev.size())
+	_click()
+	log.call("roads=%d dug=%d/%d" % [sim.roads.size(), sim.roads.values()[0].dug, sim.roads.values()[0].n_own])
+	_run(250.0)
+	log.call("after 250s: dug=%d/%d" % [sim.roads.values()[0].dug, sim.roads.values()[0].n_own])
+	var pth := sim.route(wb.door.x, wb.door.y, hq.door.x, hq.door.y)
+	log.call("route len=%d" % pth.size())
+	var mc := Vector2i(-1, -1)
+	if sim.roads.size() > 0:
+		var rd: Sim.Road = sim.roads.values()[0]
+		var m: Array = rd.cells[rd.cells.size() / 2]
+		mc = Vector2i(m[0], m[1])
+	_run(5.0)
+	# Schubkarren im Traegerlager
+	sim.set_barrows(tl, 2)
+	log.call("barrows tl=%d free=%d" % [tl.barrows, sim.barrows_free])
+	# Bauarbeiter: Pause/Abriss-Rueckgabe pruefen
 	var before := sim.total_stock("bretter")
-	var hz: Sim.Bld = null
-	for r in range(4, 12):
-		for a in 24:
-			var hx := 190 + int(cos(a * TAU / 24.0) * r * 2)
-			var hy := 184 + int(sin(a * TAU / 24.0) * r * 2)
-			if hz == null and sim.inb(hx, hy) and sim.can_place("haus", hx, hy) == "":
-				hz = sim.place_building("haus", hx, hy)
-	var hq0: Sim.Bld = sim.blds.values()[0]
-	var hfl: Sim.Flag = sim.flags[hz.fid]
-	var hqfl: Sim.Flag = sim.flags[hq0.fids[0]]
-	var hpath := sim.find_path(hfl.x, hfl.y, hqfl.x, hqfl.y)
-	log.call("haus path len=%d" % hpath.size())
-	sim.add_road(hpath)
+	var hsp := _spot("haus", hc.x + 4, hc.y + 6)
+	var hz := sim.place_building("haus", hsp.x, hsp.y)
 	hz.paused = true
-	for i in 300:
-		sim.update(0.1)
+	_run(30.0)
 	log.call("paused haus inbox=%s prog=%.2f" % [str(hz.inbox), hz.prog])
 	hz.paused = false
-	for i in 1500:
-		sim.update(0.1)
+	_run(150.0)
 	log.call("haus done=%s msg=%s" % [hz.done, hz.msg])
 	var bs := sim.total_stock("bretter")
 	sim.demolish(hz)
-	log.call("refund bretter %d -> %d" % [bs, sim.total_stock("bretter")])
-	# Ranch, Lager, Landmark
+	var piles := 0
+	for pb in sim.blds.values():
+		if pb.type == "haufen":
+			piles += 1
+			log.call("pile outbox=%s" % str(pb.outbox))
+	_run(120.0)
+	var left := 0
+	for pb in sim.blds.values():
+		if pb.type == "haufen":
+			left += 1
+	log.call("haus demolished: piles %d -> %d after 120s, bretter %d, holz %d" % [piles, left, sim.total_stock("bretter"), sim.total_stock("holz")])
+	# Baustelle und Lagerhaus abreissen
+	var lsp := _spot("lager", hc.x + 2, hc.y + 14)
+	var lg := sim.place_building("lager", lsp.x, lsp.y)
+	log.call("site lager demolishable=%s" % sim.can_demolish(lg))
+	sim.demolish(lg)
+	log.call("hq demolishable=%s" % sim.can_demolish(hq))
+	# Ranch, Lager, Landmarks
 	sim.pop = 80
 	for t in ["ranch", "lager", "schrein", "obelisk", "glaspalast", "eispavillon", "laterne"]:
-		var ok := false
-		for r in range(3, 20):
-			for a in 20:
-				var x := 190 + int(cos(a * TAU / 20.0) * r * 2)
-				var y := 188 + int(sin(a * TAU / 20.0) * r * 2)
-				if sim.inb(x, y) and sim.can_place(t, x, y) == "":
-					var b := sim.place_building(t, x, y)
-					if Data.BD[t].kind == "lm" or t == "ranch":
-						for k in Data.BD[t].cost:
-							b.inbox[k] = Data.BD[t].cost[k]
-						b.prog = 0.99
-					ok = true
-					break
-			if ok:
-				break
-		log.call("placed %s = %s" % [t, str(ok)])
-	for i in 400:
-		sim.update(0.1)
+		var s2 := _spot(t, hc.x, hc.y + 16, 3, 40)
+		if s2.x >= 0:
+			var b := sim.place_building(t, s2.x, s2.y)
+			if Data.BD[t].kind == "lm" or t == "ranch":
+				for k in Data.BD[t].cost:
+					b.inbox[k] = Data.BD[t].cost[k]
+				b.prog = 0.99
+		log.call("placed %s = %s" % [t, str(s2.x >= 0)])
+	_run(40.0)
 	log.call("landmarks=%d pop=%d animals=%d" % [sim.landmarks.size(), sim.pop, sim.animals.size()])
-	# Auswahl + UI
+	# Auswahl + UI (auch Traegerlager-Panel)
 	_set_mode("select", "")
-	hover = Vector2i(188, 180)
+	hover = Vector2i(tl.x + 1, tl.y + 1)
 	_click()
 	_update_ui()
 	log.call("sel=%s" % (sel.type if sel else "none"))
-	# Abriss
-	_set_mode("demolish", "")
-	for b in sim.blds.values():
-		if b.type == "holzfaeller":
-			hover = Vector2i(b.x, b.y)
-			_click()
-			break
-	seg = sim.segs.values()[0]
-	hover = Vector2i(seg.cells[seg.cells.size() / 2][0], seg.cells[seg.cells.size() / 2][1])
+	hover = Vector2i(hq.x + 1, hq.y + 1)
 	_click()
-	for i in 100:
-		sim.update(0.1)
+	_update_ui()
+	log.call("sel=%s" % (sel.type if sel else "none"))
+	# Abriss: Holzfaeller, Traegerlager (Karren zurueck), Weg
+	_set_mode("demolish", "")
+	hover = Vector2i(hf.x, hf.y)
+	_click()
+	var bf := sim.barrows_free
+	hover = Vector2i(tl.x + 1, tl.y + 1)
+	_click()
+	_click()
+	log.call("tl demolished=%s barrows free %d -> %d" % [str(not sim.blds.has(tl.id)), bf, sim.barrows_free])
+	if mc.x >= 0:
+		hover = mc
+		_click()
+		log.call("after road click roads=%d" % sim.roads.size())
+	_run(10.0)
 	_update_mini()
-	log.call("after demolish blds=%d segs=%d flags=%d" % [sim.blds.size(), sim.segs.size(), sim.flags.size()])
+	log.call("after demolish blds=%d roads=%d carriers=%d" % [sim.blds.size(), sim.roads.size(), sim.carrier_count()])
 	_set_mode("select", "")
 	sel = null
 
 func _demo() -> void:
 	var hq: Sim.Bld = sim.blds.values()[0]
-	var hqf: Sim.Flag = sim.flags[hq.fid]
 	sim.pop = 200
 	for k in ["bretter", "steinblock", "stein", "holz", "wasser", "brot", "fisch", "fleisch", "weizen", "gericht"]:
 		hq.stock[k] = hq.stock.get(k, 0) * 3 + 20
 	if OS.get_environment("PIX_NOWATER") != "":
 		hq.stock["wasser"] = 0   # Debug: Brunnen soll arbeiten statt "Genug auf Lager"
+	hq.cn = 8
+	sim.set_barrows(hq, 3)
 	var list := [
+		["wegebauer", 95, 92], ["traeger", 95, 92], ["traeger", 95, 92], ["traeger", 95, 92],
 		["holzfaeller", 95, 92], ["foerster", 95, 92], ["saegewerk", 95, 92], ["steinbruch", 108, 106], ["steinmetz", 95, 92], ["brunnen", 95, 92],
 		["fischer", 84, 98], ["farm", 95, 92], ["muehle", 95, 92], ["baeckerei", 95, 92], ["taverne", 95, 92], ["jaeger", 95, 92], ["wagner", 95, 92], ["ballon", 99, 96],
 		["haus", 95, 92], ["haus", 95, 92], ["haus", 95, 92], ["lager", 95, 92], ["ranch", 95, 92], ["metzger", 95, 92], ["garten", 95, 92],
 		["kraeuter", 95, 92], ["pilzsammler", 95, 92], ["kueche", 95, 92],
-		["feensammler", 57, 62], ["obsidian", 147, 105], ["pilzhuette", 54, 138], ["sandgrube", 129, 147], ["glashuette", 95, 92], ["eishauer", 112, 38],
+		["traeger", 57, 62], ["lager", 57, 62], ["feensammler", 57, 62],
+		["traeger", 147, 105], ["lager", 147, 105], ["obsidian", 147, 105],
+		["traeger", 54, 138], ["lager", 54, 138], ["pilzhuette", 54, 138],
+		["traeger", 129, 147], ["lager", 129, 147], ["sandgrube", 129, 147], ["glashuette", 129, 147],
+		["traeger", 112, 38], ["lager", 112, 38], ["eishauer", 112, 38],
 	]
 	for entry in list:
 		var type: String = entry[0]
-		var placed := false
-		for r in range(0, 56):
-			for a in 24:
-				var ang := a * TAU / 24.0 + r
-				var x: int = entry[1] * 2 + int(cos(ang) * r)
-				var y: int = entry[2] * 2 + int(sin(ang) * r * 0.8)
-				if sim.inb(x, y) and sim.can_place(type, x, y) == "":
-					var b := sim.place_building(type, x, y)
-					var df: Sim.Flag = sim.flags[b.fid]
-					# mit naechstem erreichbaren Flag verbinden
-					var best: Array = []
-					var fl: Array = sim.flags.values()
-					fl.sort_custom(func(p, q): return Vector2(p.x - df.x, p.y - df.y).length() < Vector2(q.x - df.x, q.y - df.y).length())
-					for f in fl:
-						if f == df:
-							continue
-						var path := sim.find_path(df.x, df.y, f.x, f.y)
-						if path.size() > 1:
-							best = path
-							break
-					if best.size() > 1:
-						sim.add_road(best)
-						placed = true
-					else:
-						sim.demolish(b)
-					break
-			if placed:
-				break
+		var sp := _spot(type, entry[1] * 2, entry[2] * 2, 0, 56)
+		if sp.x < 0:
+			continue
+		# die Wege-Infrastruktur steht sofort, der Rest wird gebaut
+		var b := sim.place_building(type, sp.x, sp.y, type in ["traeger", "lager", "wegebauer"])
+		if type == "traeger":
+			sim.set_carriers(b, 3)
+		elif type == "lager":
+			for k in ["bretter", "steinblock", "stein", "holz", "wasser"]:
+				b.stock[k] = 20
+		elif type == "wegebauer":
+			# Beispielweg vom Wegebauer zum Langhaus (wird geschaufelt)
+			var wp := sim.find_path(b.door.x, b.door.y, hq.door.x, hq.door.y)
+			if wp.size() > 1:
+				sim.add_road(wp)
+
 
 # ------------------------------------------------------------ UI
 func _panel_style(bg: Color, border: Color) -> StyleBoxFlat:
@@ -528,7 +537,7 @@ func _setup_ui() -> void:
 	lab_pop.mouse_filter = Control.MOUSE_FILTER_PASS
 	hb.add_child(lab_pop)
 	lab_barrow = Label.new()
-	lab_barrow.tooltip_text = "Schubkarren (frei/gesamt). Bei belegten Flaggen holt sich ein Träger eine Karre und trägt 3 statt 1 Ware. Baue den Schubkarrenbauer für mehr."
+	lab_barrow.tooltip_text = "Schubkarren (frei/gesamt). Im Info-Panel von Langhaus und Trägerlager bekommt jeder Träger eine Karre und trägt 3 statt 1 Ware. Baue den Schubkarrenbauer für mehr."
 	lab_barrow.mouse_filter = Control.MOUSE_FILTER_PASS
 	hb.add_child(lab_barrow)
 	lab_builder = Label.new()
@@ -570,7 +579,7 @@ func _setup_ui() -> void:
 	menu.add_child(vb)
 	var tools := HBoxContainer.new()
 	vb.add_child(tools)
-	for tdef in [["select", "Auswahl (Esc)"], ["road", "Straße (R)"], ["flag", "Flagge (F)"], ["demolish", "Abriss (X)"]]:
+	for tdef in [["select", "Auswahl (Esc)"], ["road", "Weg (R)"],["demolish", "Abriss (X)"]]:
 		var b := Button.new()
 		b.text = tdef[1]
 		b.toggle_mode = true
@@ -626,6 +635,19 @@ func _setup_ui() -> void:
 	info_bar.add_theme_stylebox_override("background", bg)
 	info_bar.add_theme_stylebox_override("fill", fg)
 	iv.add_child(info_bar)
+	info_hub = HBoxContainer.new()
+	iv.add_child(info_hub)
+	for hdef in [["Träger −", -1, 0, "Einen Träger weniger (0 bis 10)."], ["Träger +", 1, 0, "Einen Träger mehr (0 bis 10). Er braucht einen freien Pixler."], ["Karre −", 0, -1, "Eine Schubkarre zurück in den Vorrat."], ["Karre +", 0, 1, "Eine Schubkarre aus dem Vorrat: Der Träger trägt 3 statt 1 Ware. Höchstens so viele Karren wie Träger."]]:
+		var hbtn := Button.new()
+		hbtn.text = hdef[0]
+		hbtn.tooltip_text = hdef[3]
+		hbtn.pressed.connect(func():
+			if sel != null and sel.done and Data.BD[sel.type].has("hub"):
+				if hdef[1] != 0:
+					sim.set_carriers(sel, sel.cn + hdef[1])
+				else:
+					sim.set_barrows(sel, sel.barrows + hdef[2]))
+		info_hub.add_child(hbtn)
 	var ib := HBoxContainer.new()
 	iv.add_child(ib)
 	info_pause = Button.new()
@@ -766,15 +788,15 @@ func _tut_start() -> void:
 	if tut >= 2:
 		objective.get_parent().visible = false
 		return
-	_popup("Wege und Träger", "Vor jedem Haus steht eine Flagge. Mit R ziehst du Wege von Flagge zu Flagge.\n\nAuf jedem Wegstück arbeitet ein Träger. Er nimmt eine Ware von einer Flagge und bringt sie zur nächsten. Jeder Träger ist ein Pixler und kommt aus dem Langhaus.\n\nDas Langhaus hat drei Ausgänge: links, rechts und unten. Mit Z nimmst du den zuletzt gebauten Weg wieder zurück.")
+	_popup("Träger", "Fertige Waren bleiben im Gebäude liegen, bis ein Träger sie holt. Träger sitzen im Langhaus und in Trägerlagern. Sie laufen frei über die Karte, holen Waren aus Gebäuden im Umkreis und bringen sie dorthin, wo sie gebraucht werden, sonst ins Lager.\n\nIm Info-Panel stellst du ein, wie viele Träger (0 bis 10) und Schubkarren ein Haus hat. Pixler laufen ohne Wege langsamer. Mit dem Wegebauer kannst du Wege (R) bauen.")
 	_popup("Deine Pixler", "Im Dorf leben am Anfang 30 Pixler, das Langhaus bietet Platz für 50. Jeder Träger, jeder Bauarbeiter, jedes Produktionshaus und jedes Lagerhaus (im Langhaus arbeiten drei) braucht einen Pixler. Oben siehst du, wie viele noch frei sind.\n\nIst keiner mehr frei, bekommen neue Wegstücke keinen Träger und neue Häuser können nicht gebaut werden.\n\nNeue Pixler ziehen ein, wenn in der Taverne Mahlzeiten serviert werden (Wasser und Brot, Fisch oder Fleisch) und noch Wohnraum frei ist. Mehr Wohnraum bringen Wohnhäuser.")
 	_popup("Bauarbeiter", "Neue Häuser sind Baustellen. Sind alle Materialien geliefert, laufen Bauarbeiter vom nächsten Lager zur Baustelle und bauen. Am Anfang gibt es nur wenige, jedes Lagerhaus bringt zwei weitere.\n\nWähle eine Baustelle an: Dort kannst du sie anhalten oder ihre Priorität erhöhen. Beim Abriss bekommst du Waren zurück.")
-	_popup("Holz und Stein", "Der Holzfäller fällt Bäume, das Sägewerk macht daraus Bretter. Der Steinbruch bricht Steine aus Felsen, der Steinmetz macht daraus Steinblöcke.\n\nBretter und Steinblöcke werden für jedes weitere Haus gebraucht. Setze den Holzfäller neben Bäume und den Steinbruch neben Felsen. Verbinde alle Flaggen per Weg mit dem Langhaus, dann werden Material und Waren geliefert.")
+	_popup("Holz und Stein", "Der Holzfäller fällt Bäume, das Sägewerk macht daraus Bretter. Der Steinbruch bricht Steine aus Felsen, der Steinmetz macht daraus Steinblöcke.\n\nBretter und Steinblöcke werden für jedes weitere Haus gebraucht. Setze den Holzfäller neben Bäume und den Steinbruch neben Felsen. Bleibe im Umkreis eines Trägerlagers (oder des Langhauses), dann werden Material und Waren geliefert.")
 	_tut_objective()
 
 func _tut_objective() -> void:
 	if tut == 0:
-		objective.text = "Aufgabe 1: Baue Holzfäller, Sägewerk, Steinbruch und Steinmetz. Verbinde ihre Flaggen mit dem Langhaus (R)."
+		objective.text = "Aufgabe 1: Baue Holzfäller, Sägewerk, Steinbruch und Steinmetz. Baue sie in Reichweite eines Trägerlagers."
 	elif tut == 1:
 		objective.text = "Aufgabe 2: Baue Fischer (am Wasser), Brunnen und Taverne. Ziel: die erste Mahlzeit."
 	objective.get_parent().visible = tut < 2
@@ -790,20 +812,20 @@ func _tut_update() -> void:
 	if tut == 0:
 		if _done_count("holzfaeller") > 0 and _done_count("saegewerk") > 0 and _done_count("steinbruch") > 0 and _done_count("steinmetz") > 0:
 			tut = 1
-			_popup("Essen und Taverne", "Der Fischer fängt Fisch am Ufer, der Brunnen liefert Wasser. Die Taverne macht aus Wasser und Fisch Mahlzeiten, jede Mahlzeit lockt einen neuen Pixler ins Dorf.\n\nSetze den Fischer direkt ans Wasser. Baue Brunnen und Taverne dazu und verbinde alles per Weg mit dem Langhaus.")
+			_popup("Essen und Taverne", "Der Fischer fängt Fisch am Ufer, der Brunnen liefert Wasser. Die Taverne macht aus Wasser und Fisch Mahlzeiten, jede Mahlzeit lockt einen neuen Pixler ins Dorf.\n\nSetze den Fischer direkt ans Wasser. Baue Brunnen und Taverne dazu und achte darauf, dass ein Trägerlager alles erreicht.")
 			_tut_objective()
 			_show_cat(menu_cat)
 	elif tut == 1:
 		if _done_count("taverne") > 0 and sim.meals >= 1:
 			tut = 2
-			_popup("Das Dorf läuft", "Die Taverne hat die erste Mahlzeit serviert und ein Pixler ist eingezogen.\n\nDu kannst jetzt bauen: Wohnhäuser (mehr Platz für Pixler, ausbaubar wenn sie mit Gerichten und Wasser versorgt sind), Weizenfarm, Mühle und Bäckerei (Brot), Viehzucht und Metzgerei (Fleisch), Gärtner (Gemüse), Kräuterkundler, Pilzsammler und die Küche (Gerichte), Förster (pflanzt Bäume), Jäger, Lagerhaus (mehr Bauarbeiter) und Schubkarrenbauer. Träger an belegten Flaggen holen sich eine Schubkarre und tragen damit 3 Waren.\n\nAus den Landschaften kommen besondere Waren: Feenstaub aus dem Feenwald, Obsidian vom Vulkan, Glühpilze aus dem Sumpf, Sand aus der Wüste (in der Glashütte mit Holz zu Glas) und Eis vom gefrorenen See.\n\nZiel: Baue die fünf Wahrzeichen. Jedes braucht eine dieser besonderen Waren.")
+			_popup("Das Dorf läuft", "Die Taverne hat die erste Mahlzeit serviert und ein Pixler ist eingezogen.\n\nDu kannst jetzt bauen: Wohnhäuser (mehr Platz für Pixler, ausbaubar wenn sie mit Gerichten und Wasser versorgt sind), Weizenfarm, Mühle und Bäckerei (Brot), Viehzucht und Metzgerei (Fleisch), Gärtner (Gemüse), Kräuterkundler, Pilzsammler und die Küche (Gerichte), Förster (pflanzt Bäume), Jäger, Lagerhaus (mehr Bauarbeiter) und Schubkarrenbauer. Träger mit Schubkarre tragen 3 Waren statt 1; die Karren verteilst du im Info-Panel der Trägerlager. Wegebauer und Trägerlager erweitern dein Transportnetz.\n\nAus den Landschaften kommen besondere Waren: Feenstaub aus dem Feenwald, Obsidian vom Vulkan, Glühpilze aus dem Sumpf, Sand aus der Wüste (in der Glashütte mit Holz zu Glas) und Eis vom gefrorenen See.\n\nZiel: Baue die fünf Wahrzeichen. Jedes braucht eine dieser besonderen Waren.")
 			_tut_objective()
 			_show_cat(menu_cat)
 	# Warnung vor Pixler-Mangel
 	var free := sim.free_pixlers()
 	if sim.waiting_for_pixler() > 0 and free <= 0 and time - last_starve_msg > 25.0:
 		last_starve_msg = time
-		say("%d Wegstück(e) ohne Träger: keine freien Pixler. Baue die Taverne." % sim.waiting_for_pixler(), 5.0)
+		say("%d Träger-Platz/Plätze unbesetzt: keine freien Pixler. Baue die Taverne." % sim.waiting_for_pixler(), 5.0)
 	var has_tavern := false
 	for tb in sim.blds.values():
 		if tb.type == "taverne":
@@ -865,7 +887,7 @@ func _content_count(b: Sim.Bld) -> int:
 func _try_demolish(b: Sim.Bld) -> bool:
 	# true, wenn das Gebaeude abgerissen wurde. Gebaeude mit Inhalt oder Ausbau fragen nach.
 	if not sim.can_demolish(b):
-		say("Das %s lässt sich nicht abreißen." % ("Langhaus" if b.type == "hq" else "Lagerhaus"), 2.5)
+		say("Das %s lässt sich nicht abreißen." % ("Langhaus" if b.type == "hq" else "Haufen"), 2.5)
 		sfx.play("deny", 0.5)
 		return false
 	var n := _content_count(b) if b.done else 0
@@ -878,7 +900,7 @@ func _try_demolish(b: Sim.Bld) -> bool:
 			why.append("%d Waren" % n)
 		if lv > 1:
 			why.append("Ausbaustufe %d" % lv)
-		say("%s enthält %s (Waren gehen zurück ins Lager, Ausbau nur zur Hälfte). Nochmal klicken zum Abreißen." % [Data.BD[b.type].n, " und ".join(why)], 4.0)
+		say("%s enthält %s (alles bleibt als Haufen liegen, Träger sammeln es ein). Nochmal klicken zum Abreißen." % [Data.BD[b.type].n, " und ".join(why)], 4.0)
 		sfx.play("deny", 0.4)
 		return false
 	demo_pending = -1
@@ -889,9 +911,9 @@ func _undo_road() -> void:
 	if road_undo.is_empty():
 		say("Kein Weg zum Zurücknehmen.", 1.5)
 		return
-	var cells: Array = road_undo.pop_back()
-	sim.undo_road(cells)
-	road_start = Vector2i(cells[0][0], cells[0][1]) if mode == "road" else null
+	var last: Dictionary = road_undo.pop_back()
+	sim.undo_road(last.ids)
+	road_start = last.start if mode == "road" else null
 	road_prev = []
 	road_prev_key = ""
 	sfx.play("deny", 0.5)
@@ -933,7 +955,12 @@ func _show_cat(c: String) -> void:
 		menu_grid.add_child(b)
 
 func _set_mode(m: String, bt: String) -> void:
-	if sfx != null:
+	if m == "road" and not sim.roads_unlocked():
+		say("Dafür brauchst du zuerst einen Wegebauer.", 2.5)
+		if sfx != null:
+			sfx.play("deny", 0.5)
+		m = "select"
+	elif sfx != null:
 		sfx.play("click", 0.4)
 	mode = m
 	build_type = bt
@@ -964,7 +991,7 @@ func _update_ui() -> void:
 	lab_pop.text = "Pixler %d/%d   Häuser %d · Träger %d · Bau %d · frei %d" % [sim.pop, pcap, used, sim.carrier_count(), sim.builders_active(), free]
 	for sb in speed_btns:
 		sb[0].set_pressed_no_signal(is_equal_approx(speed, sb[1]))
-	lab_pop.tooltip_text = "%d von %d Wohnplätzen belegt:\n%d arbeiten als Träger auf Wegen\n%d arbeiten in Häusern\n%d sind Bauarbeiter im Einsatz\n%d sind frei\nNeue Pixler ziehen ein, wenn die Taverne Mahlzeiten serviert und Wohnraum frei ist (Wohnhäuser)." % [sim.pop, pcap, sim.carrier_count(), used, sim.builders_active(), free]
+	lab_pop.tooltip_text = "%d von %d Wohnplätzen belegt:\n%d arbeiten als Träger (Langhaus, Trägerlager)\n%d arbeiten in Häusern\n%d sind Bauarbeiter im Einsatz\n%d sind frei\nNeue Pixler ziehen ein, wenn die Taverne Mahlzeiten serviert und Wohnraum frei ist (Wohnhäuser)." % [sim.pop, pcap, sim.carrier_count(), used, sim.builders_active(), free]
 	lab_builder.text = "Bauarbeiter %d/%d" % [sim.builders_active(), sim.builder_cap()]
 	lab_pop.modulate = Color(1, 0.55, 0.45) if free <= 0 else (Color(1, 0.9, 0.5) if free == 1 else Color(0.85, 1, 0.8))
 	lab_barrow.text = "Karren %d/%d" % [sim.barrows_free, sim.barrows_total]
@@ -998,18 +1025,30 @@ func _update_ui() -> void:
 			if sel.level < 3:
 				s += "\nVersorgung für Ausbau: %d/%d" % [mini(sel.fed, Data.HOUSE_UP[sel.level].fed), Data.HOUSE_UP[sel.level].fed]
 		elif d.kind == "store":
-			s += "Lagerarbeiter: %d, Auslieferung wartet: %d" % [sel.keepers.size(), sel.out_q.size()]
+			s += "Lager"
 			for k in Data.GOODS:
 				if sel.stock.get(k, 0) > 0:
 					items.append([k, sel.stock[k], -1])
+		elif d.kind == "hub":
+			s += "Reichweite: %d Zellen\n" % int(d.R)
+			s += "Status: " + ("%d Träger unterwegs oder sitzen bereit" % sel.carriers.size() if sel.carriers.size() > 0 else "Keine Träger")
 		else:
 			s += "Status: " + (sel.msg if sel.msg != "" else "bereit")
 			for k in sel.cap:
 				items.append([k, sel.inbox.get(k, 0), sel.cap[k]])
+			for k in sel.outbox:
+				if sel.outbox[k] > 0:
+					items.append([k, sel.outbox[k], -1])
+		if d.has("hub") and sel.done:
+			s += ("\n" if d.kind == "hub" else "\n\n") + "Träger: %d von %d besetzt\nSchubkarren: %d" % [sel.carriers.size(), sel.cn, sel.barrows]
+			for k in Data.GOODS:
+				if d.kind == "hub" and sel.stock.get(k, 0) > 0:
+					items.append([k, sel.stock[k], -1])
 		_set_info_goods(items)
+		info_hub.visible = d.has("hub") and sel.done
 		info_label.text = s
 		info_pause.text = "Weiter" if sel.paused else "Pause"
-		info_pause.visible = d.kind != "store" and d.kind != "lm" and (is_site or d.kind != "house")
+		info_pause.visible = d.kind != "store" and d.kind != "lm" and d.kind != "hub" and d.kind != "service" and (is_site or d.kind != "house")
 		info_prio.visible = is_site
 		info_prio.text = "Priorität: " + ("Hoch" if sel.prio > 0 else ("Niedrig" if sel.prio < 0 else "Normal"))
 		var pr := sim.progress(sel)
@@ -1027,7 +1066,7 @@ func _update_ui() -> void:
 
 func _update_mini() -> void:
 	mini_img = mini_base.duplicate() as Image
-	for s in sim.segs.values():
+	for s in sim.roads.values():
 		for c in s.cells:
 			mini_img.set_pixel(c[0], c[1], Color("#c39a5e"))
 	for b in sim.blds.values():
@@ -1113,7 +1152,6 @@ func _unhandled_input(ev: InputEvent) -> void:
 		match ev.keycode:
 			KEY_ESCAPE: _set_mode("select", "")
 			KEY_R: _set_mode("road", "")
-			KEY_F: _set_mode("flag", "")
 			KEY_X: _set_mode("demolish", "")
 			KEY_F5: get_tree().reload_current_scene()
 			KEY_Z: _undo_road()
@@ -1144,48 +1182,37 @@ func _click() -> void:
 			else:
 				sim.place_building(build_type, o.x, o.y)
 				sfx.play("place", 0.9)
-				say(Data.BD[build_type].n + " wird gebaut. Verbinde die Flagge davor mit einem Weg!", 3.0)
+				say(Data.BD[build_type].n + " wird gebaut.", 3.0)
 		"road":
 			var cell := _road_cell(t)
 			if road_start == null:
-				if cell.x < 0 or not (sim.flag[cell.y * MW + cell.x] != 0 or sim.road[cell.y * MW + cell.x] != 0):
-					say("Beginne die Straße an einer Flagge, einem Weg oder einem Gebäude.", 2.5)
+				if cell.x < 0 or not sim.passable(cell.x, cell.y):
+					say("Hier kann kein Weg beginnen.", 2.0)
 				else:
 					road_start = cell
 			else:
 				if road_prev.size() > 1:
-					sim.add_road(road_prev)
-					road_undo.append(road_prev.duplicate(true))
-					if road_undo.size() > 40:
-						road_undo.pop_front()
-					sfx.play("place", 0.6)
+					var ids := sim.add_road(road_prev)
+					if ids.is_empty():
+						say("Dort ist schon ein Weg.", 2.0)
+					else:
+						road_undo.append({"ids": ids, "start": Vector2i(road_prev[0][0], road_prev[0][1])})
+						if road_undo.size() > 40:
+							road_undo.pop_front()
+						sfx.play("place", 0.6)
 					var last: Array = road_prev[road_prev.size() - 1]
 					road_start = Vector2i(last[0], last[1])
 					road_prev = []
 					road_prev_key = ""
 				else:
 					say("Kein Weg dorthin möglich.", 2.0)
-		"flag":
-			if sim.road[i] != 0:
-				var ok := true
-				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-					var nx: int = t.x + d.x
-					var ny: int = t.y + d.y
-					if sim.inb(nx, ny) and sim.flag[ny * MW + nx] != 0:
-						ok = false
-				if ok:
-					sim.create_flag(t.x, t.y)
-				else:
-					say("Zu nah an einer anderen Flagge.", 2.0)
-			else:
-				say("Flaggen kommen auf bestehende Straßen.", 2.0)
 		"demolish":
 			if sim.occ[i] != 0:
 				var b = sim.blds.get(sim.occ[i])
 				if b != null:
 					_try_demolish(b)
 			else:
-				sim.remove_seg_at(t.x, t.y)
+				sim.remove_road_at(t.x, t.y)
 
 func _road_cell(t: Vector2i) -> Vector2i:
 	if not sim.inb(t.x, t.y):
@@ -1194,13 +1221,7 @@ func _road_cell(t: Vector2i) -> Vector2i:
 	if sim.occ[i] != 0:
 		var b = sim.blds.get(sim.occ[i])
 		if b != null:
-			# naechstgelegene Tuer (Langhaus hat drei)
-			var best: Sim.Flag = sim.flags[b.fid]
-			for fk in b.fids:
-				var f: Sim.Flag = sim.flags[fk]
-				if Vector2(f.x - t.x, f.y - t.y).length() < Vector2(best.x - t.x, best.y - t.y).length():
-					best = f
-			return Vector2i(best.x, best.y)
+			return b.door
 		return Vector2i(-1, -1)
 	return t
 
@@ -1341,11 +1362,9 @@ func _update_hint() -> void:
 		ghost_err = sim.can_place(build_type, bo.x, bo.y)
 		h = ghost_err if ghost_err != "" else Data.BD[build_type].n + ": Klick zum Bauen"
 	elif mode == "road":
-		h = "Straße: Klick auf Flagge/Gebäude als Start, dann Ziel anklicken. Rechtsklick beendet." if road_start == null else "Ziel anklicken (Kette möglich). Rechtsklick/Esc beendet."
-	elif mode == "flag":
-		h = "Flagge auf eine Straße setzen: mehr Träger, mehr Durchsatz."
+		h = "Weg: Klick auf ein Gebäude oder eine freie Stelle als Start, dann das Ziel anklicken. Rechtsklick beendet." if road_start == null else "Ziel anklicken (Kette möglich). Rechtsklick/Esc beendet."
 	elif mode == "demolish":
-		h = "Klick auf Gebäude, Straße oder Flagge zum Abreißen."
+		h = "Klick auf Gebäude oder Weg zum Abreißen."
 	hint.text = h
 	if mode == "road" and road_start != null and sim.inb(hover.x, hover.y):
 		var goal := _road_cell(hover)
@@ -1483,11 +1502,11 @@ const ROAD_FILL := Color("#d3a96c")
 const ROAD_LIGHT := Color("#e3bd82")
 const ROAD_W := 8.0
 
-func _seg_pts(s: Sim.Seg) -> void:
+func _seg_pts(s: Sim.Road) -> void:
 	# Weg als Polylinie ueber die Zellmitten; Knickpunkte bekommen runde Gelenke
 	var pts := PackedVector2Array()
 	var bends := PackedVector2Array()
-	var n: int = s.cells.size()
+	var n: int = mini(s.cells.size(), s.own_from + s.dug)   # nur der schon gegrabene Teil
 	for k in n:
 		var c: Array = s.cells[k]
 		var p := Vector2(c[0] * TS + TS * 0.5, c[1] * TS + TS * 0.5)
@@ -1503,40 +1522,43 @@ func _seg_pts(s: Sim.Seg) -> void:
 
 func _draw_roads(x0: int, y0: int, x1: int, y1: int) -> void:
 	var vis: Array = []
-	for s in sim.segs.values():
+	for s in sim.roads.values():
 		var bb: Rect2i = s.bb
 		if bb.position.x > x1 or bb.end.x < x0 or bb.position.y > y1 or bb.end.y < y0:
 			continue
+		if not sim.road_done(s):
+			# geplanter, noch nicht geschaufelter Teil
+			var pl := PackedVector2Array()
+			for k in range(maxi(s.own_from + s.dug - 1, 0), s.cells.size()):
+				pl.append(Vector2(s.cells[k][0] * TS + TS * 0.5, s.cells[k][1] * TS + TS * 0.5))
+			if pl.size() > 1:
+				draw_polyline(pl, Color(0.45, 0.3, 0.15, 0.35), 3.0)
 		if s.pts.is_empty():
 			_seg_pts(s)
+		if s.pts.size() < 2:
+			continue
 		vis.append(s)
-	var vf: Array = []
-	for f in sim.flags.values():
-		if f.x >= x0 and f.x <= x1 and f.y >= y0 and f.y <= y1:
-			vf.append(Vector2(f.x * TS + TS * 0.5, f.y * TS + TS * 0.5))
 	# 1. Rand, 2. Fuellung, 3. Glanz: alle Wege einer Ebene zusammen, damit Abzweige ohne Naht verschmelzen
 	for s in vis:
 		draw_polyline(s.pts, ROAD_EDGE, ROAD_W + 2.0)
 		for p in s.bends:
 			draw_circle(p, ROAD_W * 0.5 + 1.0, ROAD_EDGE)
-	for p in vf:
-		draw_circle(p, ROAD_W * 0.5 + 2.0, ROAD_EDGE)
+		draw_circle(s.pts[0], ROAD_W * 0.5 + 1.0, ROAD_EDGE)
+		draw_circle(s.pts[s.pts.size() - 1], ROAD_W * 0.5 + 1.0, ROAD_EDGE)
 	for s in vis:
 		draw_polyline(s.pts, ROAD_FILL, ROAD_W)
 		for p in s.bends:
 			draw_circle(p, ROAD_W * 0.5, ROAD_FILL)
-	for p in vf:
-		draw_circle(p, ROAD_W * 0.5 + 1.0, ROAD_FILL)
+		draw_circle(s.pts[0], ROAD_W * 0.5, ROAD_FILL)
+		draw_circle(s.pts[s.pts.size() - 1], ROAD_W * 0.5, ROAD_FILL)
 	for s in vis:
 		draw_polyline(s.pts, ROAD_LIGHT, 3.0)
-		for c in s.cells:
+		for c in s.cells.slice(0, s.own_from + s.dug):
 			var h := Data.hsh(c[0], c[1], 7.0)
 			if h < 0.45:
 				var qx: float = c[0] * TS + 3.0 + floorf(Data.hsh(c[1], c[0], 2.0) * 10.0)
 				var qy: float = c[1] * TS + 4.0 + floorf(Data.hsh(c[0] * 3.0, c[1], 4.0) * 8.0)
 				draw_rect(Rect2(qx, qy, 1 + (1 if h < 0.15 else 0), 1), ROAD_EDGE if h < 0.3 else Color("#f0d3a0"))
-	for p in vf:
-		draw_circle(p, ROAD_W * 0.5, ROAD_LIGHT.darkened(0.04))
 
 func _draw() -> void:
 	var vr := _view_rect()
@@ -1588,13 +1610,6 @@ func _draw() -> void:
 			if b.st in ["walk", "act", "back", "out", "ret"]:
 				var wr := clampi(int(b.wy) - y0, 0, rmax)
 				rows[wr].append([3, b])
-	for f in sim.flags.values():
-		if f.x >= x0 - 1 and f.x <= x1 + 1 and f.y >= y0 - 1 and f.y <= y1 + 1:
-			rows[clampi(f.y - y0, 0, rmax)].append([2, f])
-	for s in sim.segs.values():
-		var c := sim.seg_pos(s)
-		if c.x >= x0 - 1 and c.x <= x1 + 2 and c.y >= y0 - 1 and c.y <= y1 + 2:
-			rows[clampi(int(c.y) - y0, 0, rmax)].append([4, s, c])
 	for a in sim.animals:
 		if a.x >= x0 - 1 and a.x <= x1 + 2 and a.y >= y0 - 1 and a.y <= y1 + 2:
 			rows[clampi(int(a.y) - y0, 0, rmax)].append([5, a])
@@ -1602,9 +1617,11 @@ func _draw() -> void:
 		if a.x >= x0 - 1 and a.x <= x1 + 2 and a.y >= y0 - 1 and a.y <= y1 + 2:
 			rows[clampi(int(a.y) - y0, 0, rmax)].append([5, a])
 	for b in sim.blds.values():
-		for k in b.keepers:
-			if k.st in ["go", "drop", "back"] and k.x >= x0 - 1 and k.x <= x1 + 2 and k.y >= y0 - 1 and k.y <= y1 + 2:
-				rows[clampi(int(k.y) - y0, 0, rmax)].append([7, k])
+		for c in b.carriers:
+			if c.x >= x0 - 1 and c.x <= x1 + 2 and c.y >= y0 - 1 and c.y <= y1 + 2:
+				# sitzende Traeger liegen in der Reihe des Gebaeudes, damit sie vor den Sitzen gezeichnet werden
+				var cy: int = (b.y + b.h - 1) if c.st == "sit" else int(c.y)
+				rows[clampi(cy - y0, 0, rmax)].append([4, c])
 	for bd in sim.builders:
 		if bd.x >= x0 - 1 and bd.x <= x1 + 2 and bd.y >= y0 - 1 and bd.y <= y1 + 2:
 			rows[clampi(int(bd.y) - y0, 0, rmax)].append([6, bd])
@@ -1612,12 +1629,10 @@ func _draw() -> void:
 		for e in rows[ri]:
 			match e[0]:
 				6: _draw_builder(e[1])
-				7: _draw_keeper(e[1])
 				0: _draw_obj(e[1])
 				1: _draw_bld(e[1])
-				2: _draw_flag(e[1])
 				3: _draw_worker(e[1])
-				4: _draw_carrier(e[1], e[2])
+				4: _draw_carrier(e[1])
 				5: _draw_animal(e[1])
 	# Vögel (mit Schatten), Schmetterlinge
 	for b in birds:
@@ -1701,7 +1716,7 @@ func _draw_bld(b: Sim.Bld) -> void:
 	var foot := Vector2(b.x * TS + W / 2.0, (b.y + b.h) * TS + 2)
 	if not b.done:
 		var cost := sim.site_cost(b)
-		var tx: Texture2D = frs[0]
+		var tx: Texture2D = frs[b.design * 2] if b.type == "traeger" else frs[0]
 		var top := foot.y - tx.get_height()
 		if b.upg:
 			tx = frs[b.level - 1]
@@ -1733,8 +1748,11 @@ func _draw_bld(b: Sim.Bld) -> void:
 	var tx2: Texture2D = frs[fr] if b.type in ["muehle", "taverne", "glashuette", "hq", "obelisk", "brunnen"] else frs[0]
 	if b.type == "haus":
 		tx2 = frs[b.level - 1]
+	elif b.type == "traeger":
+		tx2 = frs[b.design * 2 + (int(time * 4.0 + b.id) % 2)]
 	var mod := Color(1, 1, 1, 0.55) if b.paused else Color.WHITE
 	spr(tx2, foot, false, mod)
+	_draw_outbox(b)
 	if b.type == "brunnen" and b.st == "work":
 		# Der Brunnenpixler kurbelt das Wasser aus dem Boden
 		var wc := Vector2(b.x * TS + W * 0.5, foot.y - 30)
@@ -1748,28 +1766,45 @@ func _draw_bld(b: Sim.Bld) -> void:
 	if b == sel:
 		var r := Rect2(b.x * TS - 2, foot.y - tx2.get_height() - 2, W + 4, tx2.get_height() + 4)
 		draw_rect(r, Color(1, 0.9, 0.4, 0.5 + 0.3 * sin(time * 6.0)), false, 1.0)
+		if d.has("hub"):
+			draw_arc(Vector2((b.x + b.w / 2.0) * TS, (b.y + b.h / 2.0) * TS), d.R * TS, 0, TAU, 96, Color(1, 0.9, 0.4, 0.4), 1.0)
 		var pr := sim.progress(b)
 		if pr >= 0.0:
 			draw_rect(Rect2(b.x * TS, r.position.y - 7, W, 4), Color(0, 0, 0, 0.6))
 			draw_rect(Rect2(b.x * TS + 1, r.position.y - 6, (W - 2) * pr, 2), Color("#e0a840"))
 	if d.kind == "process" or d.kind == "gather" or d.kind == "house":
-		if b.st == "idle" and b.msg != "" and not b.paused and (b.msg.begins_with("Wartet") or b.msg.begins_with("Flagge") or b.msg.begins_with("Nichts") or b.msg.begins_with("Braucht")):
+		if b.st == "idle" and b.msg != "" and not b.paused and (b.msg.begins_with("Wartet") or b.msg.begins_with("Ausgang") or b.msg.begins_with("Kein Träger") or b.msg.begins_with("Nichts") or b.msg.begins_with("Braucht")):
 			var pp := Vector2(b.x * TS + W / 2.0, foot.y - tx2.get_height() - 4 + sin(time * 4.0) * 1.5)
 			draw_circle(pp, 5.0, Color("#3b2a24"))
-			draw_circle(pp, 4.0, Color("#e8a040") if not b.msg.begins_with("Flagge") else Color("#e8453c"))
+			draw_circle(pp, 4.0, Color("#e8a040") if not (b.msg.begins_with("Ausgang") or b.msg.begins_with("Kein Träger")) else Color("#e8453c"))
 			draw_string(font, pp + Vector2(-2, 3), "!", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color.WHITE)
 		if b.paused:
 			draw_string(font, Vector2(b.x * TS + W / 2.0 - 5, foot.y - tx2.get_height() - 2), "II", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color.WHITE)
 
-func _draw_flag(f: Sim.Flag) -> void:
-	var fr := int(time * 3.0 + f.id) % 2
-	draw_texture(Art.flagt[fr], Vector2(f.x * TS + 5, f.y * TS - 4))
-	for k in f.goods.size():
-		var g: Sim.Good = f.goods[k]
-		if Art.goods_w.has(g.t):
-			var gx := f.x * TS + 10 + (k % 5) * 3
-			var gy := f.y * TS + 5 - (k / 5) * 4
-			draw_texture(Art.goods_w[g.t], Vector2(gx, gy))
+func _draw_outbox(b: Sim.Bld) -> void:
+	# fertige Waren liegen neben der Tuer, bis ein Traeger sie holt
+	var k := 0
+	for g in b.outbox:
+		for n in b.outbox[g]:
+			if k >= 10 or not Art.goods_w.has(g):
+				return
+			draw_texture(Art.goods_w[g], Vector2(b.door.x * TS + 10 + (k % 5) * 3, b.door.y * TS + 5 - (k / 5) * 4))
+			k += 1
+
+func _sit_draw(foot: Vector2, flip: bool) -> void:
+	# sitzender Pixler: nur Oberkoerper (die Beine verdeckt der Sitz)
+	var tx: Texture2D = Art.man["carrier"][4]
+	var w := tx.get_width()
+	var fx := roundf(foot.x)
+	var fy := roundf(foot.y)
+	var src := Rect2(0, 0, w, 25)
+	if flip:
+		draw_set_transform(Vector2(fx, 0), 0.0, Vector2(-1, 1))
+		draw_texture_rect_region(tx, Rect2(-(w >> 1), fy - 25, w, 25), src)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	else:
+		draw_texture_rect_region(tx, Rect2(fx - (w >> 1), fy - 25, w, 25), src)
+
 
 func _walk_fr(speed_f: float, seed_f: float) -> int:
 	return int(time * speed_f + seed_f) % 4
@@ -1785,13 +1820,6 @@ func _draw_worker(b: Sim.Bld) -> void:
 	if b.carry != "":
 		draw_texture(Art.goods_w[b.carry], Vector2(roundf(foot.x) - 5, roundf(foot.y) - 42))
 
-func _draw_keeper(k: Sim.Keeper) -> void:
-	var foot := Vector2(k.x * TS, k.y * TS + 5)
-	var fr := _walk_fr(8.0, k.x) if k.st != "drop" else 4
-	spr(Art.man["keeper"][fr], foot, k.face < 0)
-	if k.job != null and k.st != "back" and Art.goods_w.has(k.job.t):
-		draw_texture(Art.goods_w[k.job.t], Vector2(roundf(foot.x) - 5, roundf(foot.y) - 42))
-
 func _draw_builder(bd: Sim.Builder) -> void:
 	var working: bool = bd.st == "work"
 	var fr := _walk_fr(8.0, bd.site) if not working else 4
@@ -1802,41 +1830,28 @@ func _draw_builder(bd: Sim.Builder) -> void:
 			draw_rect(Rect2(roundf(foot.x) + (13 if bd.face > 0 else -14), roundf(foot.y) - 26, 2, 2), Color("#fff0b0"))
 	spr(Art.man["builder"][fr], foot, bd.face < 0)
 
-func _draw_carrier(s: Sim.Seg, c: Vector2) -> void:
-	if s.st == "wait_car":
+func _draw_carrier(c: Sim.Carrier) -> void:
+	if c.st == "sit":
+		_sit_draw(Vector2(c.x * TS, c.y * TS + 2), c.face < 0)
 		return
-	var moving: bool = s.st != "idle"
-	var fr := _walk_fr(8.0, s.id) if moving else 4
-	var dx := 1
-	if s.st == "arrive":
-		var n := s.arr.size()
-		var k := clampi(int(floor(s.arr_d)), 0, n - 2)
-		dx = s.arr[k + 1][0] - s.arr[k][0]
-		if dx == 0:
-			dx = 1 if int(s.id) % 2 == 0 else -1
-	else:
-		var tp := float(s.L) * 0.5
-		if s.st == "pick" or s.st == "carry":
-			tp = 0.0 if s.end == 0 else float(s.L)
-		var heading := 1 if tp > s.p else -1
-		var k2 := clampi(int(floor(s.p)), 0, s.L - 1)
-		dx = (s.cells[k2 + 1][0] - s.cells[k2][0]) * heading
+	var moving: bool = c.st != "pick" and c.st != "drop"
+	var fr := _walk_fr(8.0, c.seat * 1.7) if moving else 4
 	var foot := Vector2(c.x * TS, c.y * TS + 5)
-	var fl := dx < 0
+	var fl: bool = c.face < 0
 	spr(Art.man["carrier"][fr], foot, fl)
-	var n_load: int = s.load.size()
-	if s.barrow and s.st != "arrive":
+	var n_load: int = c.load.size() if (c.st == "carry" or c.st == "drop") else 0
+	if c.barrow and c.st != "enter" and c.st != "exit":
 		# Schubkarre vor dem Traeger; Waren liegen darin
 		var bx := roundf(foot.x) + (-17 if fl else 3)
 		var by := roundf(foot.y) - 9
 		draw_texture(Art.an["barrow"][0], Vector2(bx, by))
 		for k3 in n_load:
-			if Art.goods_w.has(s.load[k3].t):
-				draw_texture(Art.goods_w[s.load[k3].t], Vector2(bx + 1 + k3 * 4, by - 8 - (k3 % 2) * 2))
+			if Art.goods_w.has(c.load[k3].t):
+				draw_texture(Art.goods_w[c.load[k3].t], Vector2(bx + 1 + k3 * 4, by - 8 - (k3 % 2) * 2))
 	else:
 		for k3 in n_load:
-			if Art.goods_w.has(s.load[k3].t):
-				draw_texture(Art.goods_w[s.load[k3].t], Vector2(roundf(foot.x) - 5 + (k3 * 7 - 3), roundf(foot.y) - 42 - k3 * 2))
+			if Art.goods_w.has(c.load[k3].t):
+				draw_texture(Art.goods_w[c.load[k3].t], Vector2(roundf(foot.x) - 5 + (k3 * 7 - 3), roundf(foot.y) - 42 - k3 * 2))
 
 func _draw_animal(a: Sim.Animal) -> void:
 	var kind := a.kind
@@ -1866,7 +1881,7 @@ func _draw_overlays() -> void:
 			var foot := Vector2(o.x * TS + d.w * TS / 2.0, (o.y + d.h) * TS + 2)
 			spr(Art.bld[build_type][0], foot, false, Color(col.r, col.g, col.b, 0.75))
 			draw_rect(Rect2(o.x * TS, o.y * TS, d.w * TS, d.h * TS), col, false, 1.0)
-			# Tuer-Flaggen
+			# Tuer (hier werden Waren uebergeben)
 			var doors := sim.door_offsets(build_type, o.x, o.y)
 			if doors.is_empty():
 				doors = [[d.w / 2, d.h]]
@@ -1886,7 +1901,7 @@ func _draw_overlays() -> void:
 			if road_start != null:
 				draw_rect(Rect2(road_start.x * TS + 1, road_start.y * TS + 1, 14, 14), Color(0.4, 1, 0.5, 0.7), false, 1.0)
 			draw_rect(Rect2(t.x * TS, t.y * TS, TS, TS), Color(1, 1, 1, 0.5), false, 1.0)
-		"flag", "demolish", "select":
+		"demolish", "select":
 			var col := Color(1, 0.4, 0.4, 0.6) if mode == "demolish" else Color(1, 1, 1, 0.4)
 			draw_rect(Rect2(t.x * TS, t.y * TS, TS, TS), col, false, 1.0)
 
@@ -1948,7 +1963,7 @@ func _draw_glow(n: Node2D) -> void:
 			"pilzhuette": _glow(n, "teal", c + Vector2(0, -24), 2.4, a * 0.8)
 			"obsidian": _glow(n, "lava", c + Vector2(0, -12), 2.0, a)
 			_:
-				if d.kind != "store" or b.type == "hq":
+				if (d.kind != "store" or b.type == "hq") and d.kind != "pile":
 					_glow(n, "warm", c + Vector2(0, -12), 2.2, a * 0.6)
 
 func _glow(n: Node2D, name: String, c: Vector2, s: float, a: float) -> void:

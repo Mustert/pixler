@@ -3,7 +3,7 @@ extends RefCounted
 
 const TS := 16
 # Feinheit des Rasters: 1 Kachel der Entwurfswerte (BD_T) = K x K Zellen.
-# Wege, Flaggen und Pixler leben auf dem feinen Raster, Gebaeude sind entsprechend groesser.
+# Wege und Pixler leben auf dem feinen Raster, Gebaeude sind entsprechend groesser.
 const K := 2
 const MW := 192 * K
 const MH := 192 * K
@@ -14,6 +14,8 @@ const HQ_CAP := 50
 # Weiche Objekte (Leuchtblume, Glühpilz, Kraut, Pilz): blockieren weder Bauplätze noch Wege,
 # sie werden beim Bauen einfach weggeräumt.
 const SOFT := [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1]
+const RAW := {"bretter": "holz", "steinblock": "stein"}   # Abriss gibt Rohstoffe zurück
+const CARRIERS_MAX := 10    # Träger je Trägerlager
 const HOUSE_CAP := [0, 4, 8, 14]
 const HOUSE_NAME := ["", "Hütte", "Haus", "Stadthaus"]
 # Ausbau von Stufe N auf N+1: Material + wie oft die Bewohner versorgt worden sein müssen
@@ -36,13 +38,17 @@ const GNAME := {
 
 const CATS := ["Basis", "Nahrung", "Biome", "Wahrzeichen"]
 
-# kind: store | gather | process | lm | house
+# kind: store | gather | process | lm | house | hub (Trägerlager) | service (Wegebauer)
+# "hub": Gebäude mit Trägern (Langhaus, Trägerlager). R = Reichweite, cn = Träger beim Bau.
 # Entwurfswerte in Kachel-Einheiten (w, h, R); BD ist die auf Zellen hochgerechnete Fassung.
 const BD_T := {
-	"hq": {"n": "Langhaus (Hauptquartier)", "w": 5, "h": 2, "cost": {}, "kind": "store", "keepers": 3, "cat": ""},
+	"hq": {"n": "Langhaus (Hauptquartier)", "w": 5, "h": 2, "cost": {}, "kind": "store", "hub": true, "R": 20, "cn": 4, "cat": ""},
+	"traeger": {"n": "Trägerlager", "w": 2, "h": 2, "cost": {"bretter": 3, "steinblock": 1}, "kind": "hub", "hub": true, "R": 12, "cn": 2, "cat": "Basis", "d": "Hier sitzen bis zu 10 Träger (Steinkreis, Lagerfeuer oder Pilze). Sie holen Waren aus den Gebäuden im Umkreis und bringen sie dorthin, wo sie gebraucht werden, sonst ins Lager. Die Reichweite ist doppelt so groß wie bei den meisten Betrieben."},
+	"wegebauer": {"n": "Wegebauer", "w": 2, "h": 2, "cost": {"bretter": 3, "steinblock": 1}, "kind": "service", "cat": "Basis", "d": "Schaltet Wege (R) frei. Sein Pixler schaufelt neue Wege Zelle für Zelle frei, pro Wegebauer ein Weg zur Zeit: für viele Wege baust du mehrere. Pixler laufen auf Wegen schneller als querfeldein.", "col": "#b9a27a"},
+	"haufen": {"n": "Abrisshaufen", "w": 1, "h": 1, "cost": {}, "kind": "pile", "cat": ""},
 	"haus": {"n": "Wohnhaus", "w": 2, "h": 2, "cost": {"bretter": 3, "steinblock": 1}, "kind": "house", "cat": "Basis", "d": "Wohnraum für 4 Pixler. Mit Gerichten und Wasser versorgt, kann es zu Haus (8) und Stadthaus (14) ausgebaut werden."},
-	"wagner": {"n": "Schubkarrenbauer", "w": 2, "h": 2, "cost": {"bretter": 3}, "kind": "process", "ins": {"bretter": 2}, "out": "", "t": 10.0, "cat": "Basis", "d": "Baut Schubkarren. Bei belegten Flaggen holt sich ein Träger eine Karre und trägt 3 statt 1 Ware.", "col": "#c9a06a"},
-	"lager": {"n": "Lagerhaus", "w": 2, "h": 2, "cost": {"bretter": 3, "steinblock": 2}, "kind": "store", "keepers": 1, "cat": "Basis", "d": "Lagert Waren an einem zweiten Ort. Ein fest angestellter Lagerarbeiter trägt Waren nach und nach vor die Tür. Jedes Lagerhaus bringt 2 weitere Bauarbeiter."},
+	"wagner": {"n": "Schubkarrenbauer", "w": 2, "h": 2, "cost": {"bretter": 3}, "kind": "process", "ins": {"bretter": 2}, "out": "", "t": 10.0, "cat": "Basis", "d": "Baut Schubkarren. Im Trägerlager bekommt jeder Träger auf Wunsch eine Karre und trägt 3 statt 1 Ware.", "col": "#c9a06a"},
+	"lager": {"n": "Lagerhaus", "w": 2, "h": 2, "cost": {"bretter": 3, "steinblock": 2}, "kind": "store", "cat": "Basis", "d": "Lagert Waren an einem zweiten Ort. Träger bringen Waren hin, die sonst niemand braucht, und holen sie bei Bedarf wieder ab. Jedes Lagerhaus bringt 2 weitere Bauarbeiter."},
 	"holzfaeller": {"n": "Holzfäller", "w": 2, "h": 2, "cost": {"bretter": 2}, "kind": "gather", "need": "tree", "R": 6, "out": "holz", "t": 9.0, "cat": "Basis", "d": "Fällt ausgewachsene Bäume in der Nähe.", "col": "#4f9a55"},
 	"foerster": {"n": "Förster", "w": 2, "h": 2, "cost": {"bretter": 2}, "kind": "gather", "need": "plant", "R": 5, "out": "", "t": 10.0, "cat": "Basis", "d": "Pflanzt neue Bäume. Der Wald wächst nach.", "col": "#7bbd4a"},
 	"saegewerk": {"n": "Sägewerk", "w": 2, "h": 2, "cost": {"bretter": 2, "steinblock": 2}, "kind": "process", "ins": {"holz": 1}, "out": "bretter", "outn": 1, "t": 5.0, "cat": "Basis", "d": "Holz wird zu Brettern.", "col": "#a67c52"},
