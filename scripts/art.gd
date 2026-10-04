@@ -10,7 +10,7 @@ static var man := {}        # key -> Array[Texture2D]
 static var an := {}         # kind -> Array[Texture2D]
 static var balloon: Array = []
 static var road: Array = []
-static var flagt: Array = []
+static var station: Texture2D
 static var glow := {}
 static var fieldt: Array = []
 static var fieldt2: Array = []
@@ -561,7 +561,7 @@ static func bld_img(type: String, fr: int) -> Image:
 			for bx in [4, 20, 36, 44, 60, 75]:
 				rect(i, bx, by, 2, 17, "#6b4a34")
 			rect(i, 3, by, W - 6, 2, "#6b4a34")
-			for dxc in [8, 72]:   # Seitentueren: links und rechts fuehren die Flaggen neben dem Haus
+			for dxc in [8, 72]:   # Seitentueren (nur Zierde)
 				rect(i, dxc - 3, H - 13, 6, 10, "#5a3a2a"); rect(i, dxc - 3, H - 13, 6, 1, "#3a2418"); px(i, dxc + 1, H - 8, Color("#f0d060"))
 				rect(i, dxc - 4, H - 14, 8, 1, "#6b4a34")
 			for wx in [22, 30, 50, 58]:
@@ -682,6 +682,13 @@ static func bld_img(type: String, fr: int) -> Image:
 			for x in [4, 10, 20, 26]:
 				rect(i, x, H - 26, 1, 3 + x % 3, "#e8fbff")
 			rect(i, W - 8, H - 7, 5, 4, "#bfeaff"); rect(i, W - 8, H - 7, 5, 1, "#f0fcff")
+		"wegebauer":
+			house(i, {"wall": "#b9a27a", "roof": "#7a6a52", "bh": 14, "rh": 10, "door": "#5a4030"})
+			blob(i, W - 6, H - 7, 4.5, 3, ["#d8d2c4", "#b8b2a4", "#98927f", "#78725f"], 7.0)
+			rect(i, 3, H - 8, 6, 5, "#a07850"); rect(i, 3, H - 8, 6, 1, "#c8a070")
+			line(i, 12, H - 18, 12, H - 11, "#6b4a34"); rect(i, 11, H - 20, 3, 2, "#c8ccd8")
+		"traeger":
+			_traeger(i, fr / 2, fr % 2, W, H)
 		"schrein":
 			for k in 8:
 				var a := k * TAU / 8.0
@@ -723,9 +730,89 @@ static func bld_img(type: String, fr: int) -> Image:
 				blob(i, p[0], p[1], 4, 3, ["#8affe0", "#45e0b8", "#22b08e", "#137a66"], 2.0)
 	return i
 
+static func _traeger(i: Image, design: int, fr: int, W: int, H: int) -> void:
+	# Traegerlager: Platz mit Sitzen auf einer Ellipse (gleiche Stellen wie Sim.seat_off) und Mitte.
+	# 0 Steinkreis, 1 Staemme um ein Lagerfeuer, 2 Pilze
+	var cx := W / 2.0
+	var cy := H - 25.0       # Mitte des Grundstuecks
+	blob(i, cx, cy + 1.6, 25.0, 15.5, ["#c9b588", "#b39d70", "#9a855c", "#806e4a"], 11.0)
+	var stone := ["#d0cdd8", "#aba8b8", "#8b8899", "#6a6779"]
+	var caps := [
+		["#ff8a7a", "#e8453c", "#b82a2a", "#7a1a22"],
+		["#e8c090", "#c89458", "#a07040", "#6a4a2a"],
+		["#b8e0ff", "#74b0ec", "#4e80c8", "#2e5090"],
+	]
+	var order: Array = []
+	for s in Sim.SEATS:
+		order.append(s)
+	order.sort_custom(func(a, b): return Sim.seat_off(a).y < Sim.seat_off(b).y)
+	var mid_done := false
+	for s in order:
+		var so: Vector2 = Sim.seat_off(s)
+		if not mid_done and so.y > 0.5:
+			_traeger_mitte(i, design, fr, cx, cy + 1.6, stone)
+			mid_done = true
+		var px_ := cx + so.x * 8.0
+		var py_ := cy + so.y * 8.0
+		match design:
+			0:
+				blob(i, px_, py_ + 2.0, 5.5, 3.6, stone, 1.0 + s)
+			1:
+				rect(i, int(px_) - 5, int(py_), 10, 4, "#8a5a34")
+				rect(i, int(px_) - 5, int(py_), 10, 1, "#b88450")
+				rect(i, int(px_) - 5, int(py_) + 1, 2, 2, "#d9b070")
+				rect(i, int(px_) + 3, int(py_) + 1, 2, 2, "#6b4424")
+			2:
+				rect(i, int(px_) - 1, int(py_) + 1, 3, 5, "#f0e4cc")
+				rect(i, int(px_) + 1, int(py_) + 1, 1, 5, "#d8c8a8")
+				blob(i, px_, py_ + 0.5, 5.8, 3.2, caps[s % 3], 2.0 + s)
+				if s % 3 == 0:
+					rect(i, int(px_) - 3, int(py_) - 1, 2, 1, "#ffffff")
+					rect(i, int(px_) + 1, int(py_), 2, 1, "#ffffff")
+	if not mid_done:
+		_traeger_mitte(i, design, fr, cx, cy + 1.6, stone)
+
+static func _traeger_mitte(i: Image, design: int, fr: int, cx: float, cy: float, stone: Array) -> void:
+	var x := int(cx)
+	var y := int(cy)
+	match design:
+		0:
+			# flache Steinplatte mit einer kleinen Glut
+			blob(i, cx, cy, 7.0, 3.6, stone, 5.0)
+			rect(i, x - 1, y - 1, 3, 2, "#4a4552")
+			px(i, x, y - 1, Color("#ff9a30") if fr == 0 else Color("#ffc060"))
+		1:
+			# Lagerfeuer: Steinring, gekreuzte Scheite, Flamme
+			for k in 8:
+				var a := k * TAU / 8.0
+				blob(i, cx + cos(a) * 6.0, cy + 1.0 + sin(a) * 3.2, 2.0, 1.6, stone, 3.0 + k)
+			line(i, x - 5, y + 1, x + 5, y - 2, "#6b4424")
+			line(i, x - 5, y - 2, x + 5, y + 1, "#8a5a34")
+			var fh := 9 if fr == 0 else 11
+			poly(i, [Vector2(x - 3, y), Vector2(x + 3, y), Vector2(x + 1, y - fh), Vector2(x - 1, y - fh + 3)], "#ff8a30")
+			poly(i, [Vector2(x - 2, y), Vector2(x + 2, y), Vector2(x, y - fh + 3)], "#ffd060")
+			rect(i, x - 1, y - 3, 2, 3, "#fff4b0")
+		2:
+			# kleine Pilzgruppe in der Mitte
+			for p in [[-3, 1, 0], [2, 0, 1], [0, -2, 2]]:
+				rect(i, x + p[0], y + p[1] + 1, 2, 3, "#f0e4cc")
+				blob(i, cx + p[0] + 1.0, cy + p[1] + 1.0, 3.2, 2.0, [["#ff8a7a", "#e8453c", "#b82a2a", "#7a1a22"], ["#b8fff0", "#5df2c8", "#22b08e", "#137a66"], ["#ffd6f5", "#f0a8ec", "#c77fe0", "#9560c4"]][p[2]], 6.0 + p[0])
+
+static func station_img() -> Image:
+	# Fliegenpilz fuer die Traegerstation (ein Pixler sitzt oben drauf, siehe main.gd)
+	var i := mk(14, 14)
+	rect(i, 5, 7, 4, 6, "#f4ecd8")
+	rect(i, 5, 7, 1, 6, "#fffaf0")
+	rect(i, 8, 7, 1, 6, "#d8ccb0")
+	blob(i, 7, 5, 6.5, 4.3, ["#ff7a68", "#e8453c", "#b82a2a", "#7a1a22"], 4.0)
+	for p in [[2, 3], [6, 1], [10, 3], [4, 6], [8, 6]]:
+		rect(i, p[0], p[1], 2, 1, "#ffffff")
+		px(i, p[0], p[1] + 1, Color("#f4ecd8"))
+	return i
+
 static func house_tex(type: String) -> Array:
 	var res: Array = []
-	for fr in (3 if type == "haus" else 2):
+	for fr in (3 if type == "haus" else (6 if type == "traeger" else 2)):
 		res.append(fin(bld_img(type, fr), true))
 	return res
 
@@ -917,23 +1004,6 @@ static func field_img2(st: int) -> Image:
 					rect(i, x, y - 2, 3, 3, ["#c8504c", "#9ad05a", "#f08a30"][(x + row) % 3]); px(i, x + 1, y - 3, Color("#4a9a44"))
 	return i
 
-static func flag_img(fr: int, col: String) -> Image:
-	# kleine Wegflagge: duenner Mast, wehendes Tuch, Steinchen am Fuss (Mastfuss bei x=3, y=17)
-	var i := mk(13, 19)
-	var cc := Color(col)
-	rect(i, 3, 2, 1, 15, "#6b4a34")
-	rect(i, 3, 2, 1, 1, "#e8c050")
-	for k in 5:
-		var off := (1 if fr == 1 and k > 2 else 0)
-		rect(i, 4, 3 + k, 7 - k + off - (1 if k > 3 else 0), 1, cc)
-	rect(i, 4, 3, 6, 1, cc.lightened(0.3))
-	rect(i, 4, 7, 4, 1, cc.darkened(0.2))
-	rect(i, 1, 16, 5, 2, "#8a8794")
-	rect(i, 1, 16, 5, 1, "#c4c2d0")
-	rect(i, 2, 18, 3, 1, "#5a5766")
-	outline(i)
-	return i
-
 static func glow_img(col: Color) -> Image:
 	var i := mk(48, 48)
 	for y in 48:
@@ -1035,7 +1105,7 @@ static func build() -> void:
 	balloon = [tex(balloon_img(0)), tex(balloon_img(1))]
 	S = 1
 	var roles := {
-		"carrier": ["#c9a06a", "#6b4a34"], "idler": ["#8fbf8f", "#e8d8a0"], "builder": ["#e0c040", "#e8892c"], "keeper": ["#6f86b0", "#3c4a6e"],
+		"carrier": ["#c9a06a", "#6b4a34"], "idler": ["#8fbf8f", "#e8d8a0"], "builder": ["#e0c040", "#e8892c"],
 	}
 	for k in Data.BD:
 		if Data.BD[k].has("col"):
@@ -1053,7 +1123,9 @@ static func build() -> void:
 	an["bird"] = [tex(bird_img(0)), tex(bird_img(1))]
 	for c in ["#f5a0d0", "#a0d8f5", "#f5e070"]:
 		an["fly" + c] = [tex(fly_img(0, c)), tex(fly_img(1, c))]
-	flagt = [tex(flag_img(0, "#e8453c")), tex(flag_img(1, "#e8453c"))]
+	S = 2
+	station = fin(station_img(), true)
+	S = 1
 	glow["warm"] = tex(glow_img(Color(1.0, 0.7, 0.35)))
 	glow["pink"] = tex(glow_img(Color(1.0, 0.6, 0.95)))
 	glow["cyan"] = tex(glow_img(Color(0.5, 0.95, 1.0)))

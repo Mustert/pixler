@@ -6,13 +6,20 @@ Godot 4.x (GDScript), alle Grafiken werden zur Laufzeit prozedural erzeugt – k
 **Starten:** Ordner in Godot 4.7 öffnen (`project.godot`) und F5 drücken.
 
 ## Spielprinzip
-- Häuser stehen fest auf einem Raster. Jedes Haus hat eine **Flagge vor der Tür**.
-- Verbinde Flaggen mit **Straßen** (Taste R). Auf jedem Straßenabschnitt zwischen zwei Flaggen läuft ein **Träger**, der Waren Flagge für Flagge weiterreicht (max. 8 Waren pro Flagge).
-- Neue Häuser sind Baustellen und bekommen ihr Material über die Straßen geliefert.
-- Jedes Produktionshaus braucht einen **Pixler**. Neue Pixler ziehen ein, wenn die **Taverne** Mahlzeiten (Brot + Fisch/Fleisch + Wasser) serviert.
+Dieser Zweig (`feature/no-flags-no-carriers`) ist die **flaggen- und wegträgerlose Testvariante**.
+- Häuser stehen fest auf einem Raster. Es gibt keine Flaggen und keine Träger auf Wegstücken mehr.
+- Waren werden in den Gebäuden gesammelt wie bisher (Eingang). Produzenten legen fertige Ware in ihren **Ausgang** (höchstens 8) und warten auf einen Träger.
+- **Träger** sitzen im **Langhaus** (4 am Start) und in **Trägerlagern**. Innerhalb ihres Umkreises (12 Kacheln, doppelt so viel wie bei den meisten Betrieben) holen sie Waren aus Betrieben und Lagern und bringen sie dorthin, wo sie gebraucht werden (Baustellen zuerst), sonst ins nächste Lager. Beide Gebäude müssen im Umkreis liegen: Für weitere Strecken baut man ein Lagerhaus als Zwischenstation und ein zweites Trägerlager.
+- **Trägerlager** gibt es in drei zufälligen Designs (Steinkreis, Baumstämme ums Lagerfeuer, Pilze), die Träger sitzen darauf. Im Info-Panel stellt man 0 bis 10 Träger und die Schubkarren ein (höchstens so viele wie Träger, mit Karre trägt ein Träger 3 Waren statt 1).
+- Pixler laufen **frei** zwischen den Gebäuden, ohne Weg nur mit 60 % Tempo.
+- Der **Wegebauer** schaltet Wege (R) und **Trägerstationen** (T) frei. Wege sind schneller als Wiese (`Sim.ROAD_SPEED`, später pflasterbar für mehr Tempo). Die Trägerstation ist ein Fliegenpilz in der Mitte eines Weges, auf dem ein Pixler sitzt: Auf diesem Weg gehen alle 1,5-mal so schnell (`Sim.STATION_SPEED`).
+- Neue Häuser sind Baustellen und bekommen ihr Material von den Trägern geliefert; die Bauarbeiter laufen frei vom Lager hin.
+- Jedes Produktionshaus, jeder Träger und jede besetzte Station braucht einen **Pixler**. Neue Pixler ziehen ein, wenn die **Taverne** Mahlzeiten (Brot + Fisch/Fleisch + Wasser) serviert.
 - Ziel: Baue alle **5 Wahrzeichen**. Sie brauchen jeweils eine Spezialware aus einem Biom.
 
 ## Neu in dieser Version
+*Hinweis: Die folgenden Abschnitte stammen aus der Hauptvariante. Aussagen zu Flaggen, Wegträgern, Schubkarren an Flaggen und Lagerarbeitern gelten in diesem Zweig nicht mehr, siehe Spielprinzip oben.*
+
 - **Langhaus** mit einer Tür-Flagge unten in der Mitte. Seine drei Lagerarbeiter legen Waren gleichzeitig dort ab.
 - **Tutorial-Popups sind aus** (`var tut := 2` in `main.gd`, mit 0 läuft das Tutorial wieder).
 - **Produktionshäuser** liefern fertige Waren selbst aus: Der Pixler trägt sie aus dem Haus zur Tür-Flagge und legt sie dort ab.
@@ -47,15 +54,15 @@ Godot 4.x (GDScript), alle Grafiken werden zur Laufzeit prozedural erzeugt – k
 
 ## Steuerung
 - Linksklick: bauen / auswählen. Mausrad oder +/-: Zoom.
-- **R** Straße (Start anklicken, dann Ziel; Kettenbau, Rechtsklick/Esc beendet)
-- **F** Flagge auf Straße (mehr Träger = mehr Durchsatz)
+- **R** Weg (Start anklicken, dann Ziel; Kettenbau, Rechtsklick/Esc beendet; braucht den Wegebauer)
+- **T** Trägerstation: Klick auf einen Weg, der Pilz kommt in dessen Mitte (braucht den Wegebauer)
 - **Z** letzten Weg zurücknehmen, **M** Ton an/aus
 - **X** Abriss, **Esc** Auswahl, **Leertaste** Pause, **F5** neue Welt
 - WASD/Pfeile oder Mittelmaustaste/Rechtsklick ziehen: Kamera. Minimap anklicken zum Springen.
 
 ## Tipps
-- Staut sich eine Flagge, baue eine zweite Straße oder ein **Lagerhaus** näher an der Produktion.
-- Ein rotes/oranges Ausrufezeichen über einem Haus zeigt: wartet auf Waren oder Flagge voll.
+- Liegt viel Ware im Ausgang, setze mehr Träger ins Trägerlager, gib ihnen Schubkarren, baue ein zweites Trägerlager oder ein **Lagerhaus** näher an der Produktion.
+- Ein rotes/oranges Ausrufezeichen über einem Haus zeigt: wartet auf Waren, Ausgang voll oder kein Trägerlager in Reichweite. Wählt man ein Trägerlager aus, erscheint sein Umkreis.
 
 ## Feineres Raster, höhere Auflösung
 - Die Welt liegt auf einem **doppelt so feinen Raster** (384x384 Zellen). Gebäude sind 4x4 statt 2x2 Zellen groß, Wege, Flaggen und Pixler leben auf den kleinen Zellen: mehr Freiheit beim Straßenbau.
@@ -73,7 +80,7 @@ Godot 4.x (GDScript), alle Grafiken werden zur Laufzeit prozedural erzeugt – k
 - **Tag und Nacht:** Ein Tag dauert 10 Minuten, davon 6 Minuten Tag und 4 Minuten Nacht (Dämmerung je rund 50 Sekunden inklusive). Die Uhr zeigt 06:00-20:00 für den Tag und 20:00-06:00 für die Nacht. Werte: `DAY_LEN`/`NIGHT_LEN` in `main.gd`.
 - **Musik:** fünf Stücke laufen abwechselnd: Spieluhr, Kora, Banjo (nur am Tag), ein sehr ruhiges Klarinetten-Nachtstück (nur nachts, dort bevorzugt) und Handpan in d-Moll. Ein unpassendes Stück wird bei Wechsel der Tageszeit sanft ausgeblendet. Jedes Stück läuft als nahtlose Schleife 1 bis 3 Minuten, wird 8 Sekunden ein- und ausgeblendet, danach 10 Sekunden Pause. Die Reihenfolge wird durchgewechselt (gemischter Stapel), nie dasselbe Stück zweimal hintereinander. Regler in `audio.gd`: `MUSIC_MIN/MAX/FADE/GAP`. Ablauftest: `tools/musictest.gd`.
 - **Waren-Icons** sind deutlicher gezeichnet, Wasser ist ein Eimer. Im Info-Panel stehen Waren als Icon mit der Anzahl dahinter. Der Brunnenpixler kurbelt sichtbar das Wasser hoch.
-- Balance-Regler per Kommandozeile: `--carry=N --barrow=N --barrow-at=N --seg=N --flagcap=N`, außerdem `--select=<Gebäudetyp>` für Screenshots.
+- Balance-Regler per Kommandozeile: `--carry=N --barrow=N`, außerdem `--select=<Gebäudetyp>` für Screenshots.
 - Entwicklerwerkzeug: `tools/sheet.gd` rendert alle Sprites in ein Bild (`godot --headless --path . --script tools/sheet.gd -- out.png 2 all`).
 
 ## Debug-Optionen
